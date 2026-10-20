@@ -90,6 +90,50 @@ func TestGetBehavioral(t *testing.T) {
 	}
 }
 
+func TestGetBehavioralPolicyFilter(t *testing.T) {
+	s, _ := newTestService(t, map[string]string{
+		"Security.Policy#getAll_Policy": tbl(
+			"<PolicyName>Pol_DNS</PolicyName><State>active</State><BehavioralDosProfile>BDOS_DNS</BehavioralDosProfile><DNSProtectionProfile>DNS_Prof</DNSProtectionProfile>",
+			"<PolicyName>Pol_APP</PolicyName><State>active</State><BehavioralDosProfile>BDOS_APP</BehavioralDosProfile>",
+			"<PolicyName>Pol_SinBDoS</PolicyName><State>active</State>",
+		),
+		"Security.BehavioralDoS#getAll_Profiles":             tbl("<ProfileName>BDOS_APP</ProfileName>", "<ProfileName>BDOS_DNS</ProfileName>"),
+		"Security.DnsProtection#getAll_DnsProtectionProfile": tbl("<ProfileName>DNS_Prof</ProfileName>"),
+		"Security.bdosExcludedStatistics#getAll_rsBdosExcludedStatisticsTableEntry": tbl(
+			"<PolicyName>Pol_APP</PolicyName>", "<PolicyName>Pol_DNS</PolicyName>",
+		),
+		"Security.Reporting#getAll_Log": tbl(
+			"<AttackIndex>1</AttackIndex><Category>behavioral-doS</Category><PolicyName>Pol_APP</PolicyName>",
+			"<AttackIndex>2</AttackIndex><Category>dns-protection</Category><PolicyName>Pol_DNS</PolicyName>",
+		),
+	})
+
+	all, err := s.GetBehavioral(context.Background(), false, models.AttackFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Policies) != 2 || len(all.BDoS.Profiles) != 2 {
+		t.Errorf("sin filtro: policies=%+v perfiles=%d (la política sin BDoS/DNS no debe aparecer)", all.Policies, len(all.BDoS.Profiles))
+	}
+
+	one, err := s.GetBehavioral(context.Background(), false, models.AttackFilter{Policies: []string{"pol_dns"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one.Policies) != 1 || one.Policies[0].BDoSProfile != "BDOS_DNS" || one.Policies[0].DNSProfile != "DNS_Prof" {
+		t.Errorf("policies = %+v", one.Policies)
+	}
+	if len(one.BDoS.Profiles) != 1 || one.BDoS.Profiles[0].Name != "BDOS_DNS" || len(one.DNS.Profiles) != 1 {
+		t.Errorf("perfiles = %+v / %+v", one.BDoS.Profiles, one.DNS.Profiles)
+	}
+	if len(one.ExcludedPortsTraffic) != 1 || one.ExcludedPortsTraffic[0].PolicyName != "Pol_DNS" {
+		t.Errorf("excluded = %+v", one.ExcludedPortsTraffic)
+	}
+	if one.AttackSummary.Total != 1 || one.Attacks[0].PolicyName != "Pol_DNS" {
+		t.Errorf("attacks = %+v", one.Attacks)
+	}
+}
+
 func TestAnalyzeAttacks(t *testing.T) {
 	entries := []models.Attack{
 		{Index: 3, Time: "08-06-2024 10:00:00", Name: "SYN Flood HTTPS", Protocol: "TCP", DestinationAddress: "10.0.0.1", DestinationPort: 443, PolicyName: "Pol_WWW", Category: "syn-flood", PacketCount: 10, ByteCount: 1000},

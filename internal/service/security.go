@@ -53,17 +53,21 @@ func (s *DefenseProService) GetProfiles(ctx context.Context, types []string) (*m
 }
 
 // GetBehavioral devuelve las protecciones de comportamiento (BDoS y DNS): estado
-// global, perfiles, tráfico de puertos excluidos y los ataques de esas
-// categorías del log. f.Categories vacío = categorías behavioral.
+// global, políticas con sus perfiles, tráfico de puertos excluidos y los
+// ataques de esas categorías del log. f.Categories vacío = categorías
+// behavioral. Con f.Policies, todo se limita a esas políticas y sus perfiles.
 func (s *DefenseProService) GetBehavioral(ctx context.Context, withBypass bool, f models.AttackFilter) (*models.Behavioral, error) {
 	out := &models.Behavioral{
+		Policies:             []models.BehavioralPolicy{},
 		BDoS:                 models.BehavioralBDoS{Profiles: []models.BDoSProfile{}},
 		DNS:                  models.BehavioralDNS{Profiles: []models.DNSProfile{}},
 		ExcludedPortsTraffic: []models.ExcludedPortsTraffic{},
 	}
 	var log []models.Attack
+	var policies []models.Policy
 	tasks := []task{
 		s.scalar(soap.SecurityBehavioralDoS, "get_Status", configTTL, &out.BDoS.Status),
+		table(s, soap.SecurityPolicy, "getAll_Policy", configTTL, &policies),
 		s.scalar(soap.SecurityBehavioralDoS, "get_LearningResponsePeriod", configTTL, &out.BDoS.LearningResponsePeriod),
 		s.scalar(soap.SecurityBehavioralDoS, "get_overBlockingStatus", configTTL, &out.BDoS.OverBlocking),
 		s.scalar(soap.SecurityBehavioralDoS, "get_SamplingStatus", configTTL, &out.BDoS.Sampling),
@@ -81,6 +85,8 @@ func (s *DefenseProService) GetBehavioral(ctx context.Context, withBypass bool, 
 	if err := s.gather(ctx, tasks...); err != nil {
 		return nil, err
 	}
+
+	filterBehavioral(out, policies, toSet(f.Policies))
 
 	if len(f.Categories) == 0 {
 		f.Categories = behavioralCategories
@@ -119,4 +125,35 @@ func (s *DefenseProService) GetAnalytics(ctx context.Context, f models.AttackFil
 
 	out.Attacks = analyzeAttacks(log, f, top)
 	return out, nil
+}
+
+// filterBehavioral arma la lista de políticas behavioral y, si hay filtro de
+// política, deja sólo sus perfiles BDoS/DNS y su tráfico de puertos excluidos.
+func filterBehavioral(out *models.Behavioral, policies []models.Policy, selected map[string]bool) {
+	bdos, dns := map[string]bool{}, map[string]bool{}
+	for _, p := range policies {
+		if p.BehavioralDosProfile == "" && p.DNSProtectionProfile == "" {
+			continue
+		}
+		if !matches(selected, p.Name) {
+			continue
+		}
+		out.Policies = append(out.Policies, models.BehavioralPolicy{
+			Name:        p.Name,
+			State:       p.State,
+			Action:      p.Action,
+			BDoSProfile: p.BehavioralDosProfile,
+			DNSProfile:  p.DNSProtectionProfile,
+		})
+		bdos[p.BehavioralDosProfile] = true
+		dns[p.DNSProtectionProfile] = true
+	}
+	if selected == nil {
+		return
+	}
+	out.BDoS.Profiles = slices.DeleteFunc(out.BDoS.Profiles, func(p models.BDoSProfile) bool { return !bdos[p.Name] })
+	out.DNS.Profiles = slices.DeleteFunc(out.DNS.Profiles, func(p models.DNSProfile) bool { return !dns[p.Name] })
+	out.ExcludedPortsTraffic = slices.DeleteFunc(out.ExcludedPortsTraffic, func(e models.ExcludedPortsTraffic) bool {
+		return !matches(selected, e.PolicyName)
+	})
 }

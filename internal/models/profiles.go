@@ -146,11 +146,22 @@ type ConnectionLimitProfile struct {
 // Behavioral reúne las protecciones de comportamiento (BDoS y DNS).
 type Behavioral struct {
 	DeviceRef
+	Policies             []BehavioralPolicy     `json:"policies"`
 	BDoS                 BehavioralBDoS         `json:"bdos"`
 	DNS                  BehavioralDNS          `json:"dns"`
 	ExcludedPortsTraffic []ExcludedPortsTraffic `json:"excludedPortsTraffic"`
 	AttackSummary        AttackSummary          `json:"attackSummary"`
 	Attacks              []Attack               `json:"attacks"`
+}
+
+// BehavioralPolicy es una política con protección behavioral (BDoS y/o DNS)
+// y los perfiles que tiene asignados.
+type BehavioralPolicy struct {
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	Action      string `json:"action"`
+	BDoSProfile string `json:"bdosProfile"`
+	DNSProfile  string `json:"dnsProfile"`
 }
 
 type BehavioralBDoS struct {

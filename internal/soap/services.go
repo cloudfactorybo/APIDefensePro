@@ -72,6 +72,10 @@ var (
 	ManagementSyslogServers = Service{"radware.Management.SyslogServers", "ManagementSyslogServersAction"}
 	ManagementReporting     = Service{"radware.Management.Reporting", "ManagementReportingAction"}
 	ManagementAccess        = Service{"radware.Management.Access", "ManagementAccessAction"}
+
+	// CLICommand ejecuta un comando CLI en el equipo. Sólo lo usa el CLI de
+	// administración (diagnóstico); la API HTTP no lo expone.
+	CLICommand = Service{"radware.CLI.Command", "CLICommandAction"}
 )
 
 var registry = map[string]Service{}

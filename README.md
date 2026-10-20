@@ -168,6 +168,7 @@ El `summary` se calcula sobre todo lo que pasa el filtro, antes de aplicar `limi
 |---|---|---|
 | `/profiles` | `type` | Módulos a consultar (CSV): `bdos`, `dns`, `syn`, `https`, `oos`, `antiscanning`, `trafficfilters`, `geo`, `ert`, `qdos`, `pps`, `connectionlimit`. Sin el parámetro se consultan todos (12 llamadas SOAP); los módulos no pedidos no aparecen en la respuesta |
 | `/behavioral` | `bypass` | `true` agrega la tabla de bypass de BDoS |
+| `/behavioral` | `policy` | Limita todo a esas políticas: sus perfiles BDoS/DNS, su tráfico de puertos excluidos y sus ataques. `policies` lista qué perfiles tiene asignados cada política |
 | `/behavioral` | filtros de `/attacks` | Se aplican a los ataques behavioral (`behavioral-doS` y `dns-protection` por defecto). `limit` default `50` |
 | `/analytics` | filtros de `/attacks` | Restringen los agregados (p. ej. `?policy=Pol_WWW`). `limit` no aplica; `policy` también filtra la utilización por política |
 | `/analytics` | `top` | Cantidad de elementos en cada ranking. Default `10`, máximo `100` |
@@ -304,6 +305,7 @@ alias admin='docker compose exec app defensepro-admin'
 | `enable-device <name>` / `disable-device <name>` | Activa o pausa un equipo sin borrarlo |
 | `remove-device <name>` | Elimina un equipo |
 | `test-device <name>` | Prueba la conexión SOAP con el equipo |
+| `cli <name> "<comando>"` | Ejecuta un comando CLI en el equipo vía SOAP (sólo diagnóstico; la API HTTP no lo expone) |
 | `soap-call <name> <servicio> <operación>` | Muestra el XML crudo de cualquier operación SOAP |
 | `create-token <name>` | Emite un token de acceso (se muestra una sola vez) |
 | `list-tokens` | Lista los tokens (id, nombre, creación, último uso, estado) |

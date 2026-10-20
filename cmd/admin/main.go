@@ -127,6 +127,28 @@ func main() {
 		}
 		fmt.Println(string(body))
 
+	case "cli":
+		if len(os.Args) != 4 {
+			fmt.Fprintln(os.Stderr, `uso: admin cli <name> "<comando CLI>"   (ej: cli dp1 "system internal security bdos statistics")`)
+			os.Exit(2)
+		}
+		client := soapClient(ctx, devices, os.Args[2])
+		callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		body, err := client.Call(callCtx, soap.CLICommand, "apply_CLICommand", soap.Param{Name: "command", Value: os.Args[3]})
+		if err != nil {
+			exit(err)
+		}
+		resp, err := soap.Decode(body)
+		if err != nil {
+			exit(err)
+		}
+		out, err := resp.Value()
+		if err != nil {
+			exit(err)
+		}
+		fmt.Println(out)
+
 	case "create-token":
 		if len(os.Args) != 3 {
 			fmt.Fprintln(os.Stderr, "uso: admin create-token <name>")
@@ -208,6 +230,7 @@ Comandos:
   test-device <name>                       prueba la conexión SOAP con el equipo
   soap-call <name> <servicio> <operación>  muestra el XML crudo de una operación
                                            (ej: soap-call dp1 Device.Information get_RamSize)
+  cli <name> "<comando>"                   ejecuta un comando CLI vía SOAP (diagnóstico)
   create-token <name>
   list-tokens
   revoke-token <id>
