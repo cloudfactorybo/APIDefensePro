@@ -41,6 +41,22 @@ func TestDecodeValue(t *testing.T) {
 	}
 }
 
+func TestDecodeISO88591(t *testing.T) {
+	// Así responde el DefensePro: declaración ISO-8859-1 y bytes Latin-1 crudos
+	// (0xF3 = "ó"), que no son UTF-8 válido.
+	body := []byte(`<?xml version="1.0" encoding="ISO-8859-1"?>` +
+		`<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body>` +
+		"<r><value>Gesti\xf3n DP</value></r>" +
+		`</SOAP-ENV:Body></SOAP-ENV:Envelope>`)
+	resp, err := Decode(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := resp.Value(); v != "Gestión DP" {
+		t.Errorf("Value() = %q, want %q", v, "Gestión DP")
+	}
+}
+
 func TestDecodeValueNil(t *testing.T) {
 	body := envOpen + `<r><value xsi:nil="true">x</value></r>` + envClose
 	resp, err := Decode([]byte(body))

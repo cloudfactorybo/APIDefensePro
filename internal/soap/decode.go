@@ -1,8 +1,10 @@
 package soap
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -80,7 +82,9 @@ type Row map[string]string
 // SOAP Fault.
 func Decode(body []byte) (*Response, error) {
 	var env Node
-	if err := xml.Unmarshal(body, &env); err != nil {
+	dec := xml.NewDecoder(bytes.NewReader(body))
+	dec.CharsetReader = charsetReader
+	if err := dec.Decode(&env); err != nil {
 		return nil, fmt.Errorf("xml inválido: %w", err)
 	}
 	if env.XMLName.Local != "Envelope" {
@@ -164,6 +168,28 @@ func (r *Response) Table() ([]Row, error) {
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+// charsetReader convierte a UTF-8 las respuestas en ISO-8859-1, que es lo que
+// declara el DefensePro. Cada byte Latin-1 equivale al code point Unicode del
+// mismo valor, así que no hace falta una tabla de conversión.
+func charsetReader(label string, input io.Reader) (io.Reader, error) {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "utf-8", "utf8", "us-ascii", "ascii":
+		return input, nil
+	case "iso-8859-1", "iso8859-1", "iso_8859-1", "latin1", "latin-1", "l1":
+		raw, err := io.ReadAll(input)
+		if err != nil {
+			return nil, err
+		}
+		var b strings.Builder
+		b.Grow(len(raw))
+		for _, c := range raw {
+			b.WriteRune(rune(c))
+		}
+		return strings.NewReader(b.String()), nil
+	}
+	return nil, fmt.Errorf("charset no soportado: %s", label)
 }
 
 func indexIDs(n *Node, ids map[string]*Node) {
