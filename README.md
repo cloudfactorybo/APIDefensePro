@@ -453,7 +453,9 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | `health` | `rsWSD(RS)ResourceUtilization`, `rdwr5/60SecAvgResourceUtilization`, `rsSysUtil*`, `rdwrTemperature*`, `rsHWCPUTemperatureTable`, `rsACCResourceTable`, `rdwrPowerSupply*`, `rdwrDPHighAvailability*`, `rsWSDSysUpTime/ManagedTime/ManagedDate`, `rsIDSSuspendTable*`, `rs{Tcp,Http,Dns}AuthenListUtilization`, `rsIDSHwPolicies*`, `rsErtAttackersFeedStatus`, `rdwrSyslogServerTable` |
 | `info` | `sysDescr`, `sysName`, `sysUpTime`, `rndBrgVersion`, `rndSerialNumber`, `rndApsoluteOSVersion`, `rdwrDeviceType`, `rdwrDevicePortsConfig`, `rdwrDeviceThroughput`, `rsCoresNumber`, `rdwrDeviceAttackMitigation`, `rsWSDSysBaseMACAddress` |
 
-> RAM y disco (`used`, `capacity`) se reportan en la unidad que entrega el equipo; el WSDL no la documenta.
+> RAM y disco (`used`, `capacity`) se reportan en la unidad que entrega el equipo; el WSDL no la documenta. `ramSize` de `/system` viene en GB en un DefensePro 6 (el WSDL dice MB).
+>
+> Las lecturas que un modelo no tiene (el equipo responde `NoSuchInterfaceException`) se listan en `unsupported`, no en `errors`, y la API no las vuelve a preguntar hasta la siguiente recarga de equipos.
 
 </details>
 

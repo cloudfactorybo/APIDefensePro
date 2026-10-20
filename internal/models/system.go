@@ -16,7 +16,7 @@ type SystemInfo struct {
 	BuildNumber           string            `json:"buildNumber"`
 	HardwareVersion       string            `json:"hardwareVersion"`
 	BaseMACAddress        string            `json:"baseMacAddress"`
-	RamSizeMB             int64             `json:"ramSizeMb"`
+	RamSize               int64             `json:"ramSize"` // get_RamSize: el WSDL dice MB, pero un DP6 real reporta 32 (= GB)
 	MitigationMode        string            `json:"mitigationMode"`
 	OperationMode         string            `json:"operationMode"`
 	HAProtectionState     string            `json:"haProtectionState"`

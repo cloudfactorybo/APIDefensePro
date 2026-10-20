@@ -33,8 +33,10 @@ type DefenseProService struct {
 	logger *logrus.Logger
 	cache  *cache.Cache
 	gate   *gate
-	busy   int        // % de CPU a partir del cual se omiten consultas pesadas (0 = sin freno)
-	snmp   snmpReader // nil = equipo sin SNMP configurado
+	busy   int // % de CPU a partir del cual se omiten consultas pesadas (0 = sin freno)
+
+	unsupported sync.Map   // "Servicio#op" → *soap.Fault de operaciones que el modelo no tiene
+	snmp        snmpReader // nil = equipo sin SNMP configurado
 }
 
 func NewDefenseProService(name, baseURL, username, password string, client *http.Client, logger *logrus.Logger, c *cache.Cache, limits Limits) *DefenseProService {
@@ -66,6 +68,9 @@ func (s *DefenseProService) call(ctx context.Context, ttl time.Duration, svc soa
 	for _, p := range params {
 		key += "|" + p.Name + "=" + p.Value
 	}
+	if f, ok := s.unsupported.Load(svc.Name() + "#" + op); ok {
+		return nil, fmt.Errorf("%s.%s: %w", svc.Name(), op, f.(*soap.Fault))
+	}
 	if ttl > 0 {
 		if cached, ok := s.cache.Get(key); ok {
 			if resp, err := soap.Decode(cached); err == nil {
@@ -82,6 +87,12 @@ func (s *DefenseProService) call(ctx context.Context, ttl time.Duration, svc soa
 	s.gate.release()
 
 	if err != nil {
+		var f *soap.Fault
+		if errors.As(err, &f) && isNotSupported(err) {
+			// El modelo no tiene esta operación: no se vuelve a preguntar
+			// (el servicio se recrea al recargar equipos, cada 5 min).
+			s.unsupported.Store(svc.Name()+"#"+op, f)
+		}
 		return nil, fmt.Errorf("%s.%s: %w", svc.Name(), op, err)
 	}
 	resp, err := soap.Decode(body)
@@ -152,7 +163,12 @@ func table[T any](s *DefenseProService, svc soap.Service, op string, ttl time.Du
 }
 
 // errorSink recibe las sub-lecturas fallidas (models.DeviceRef lo implementa).
-type errorSink interface{ AddError(string) }
+// errorSink recibe las sub-lecturas fallidas y las no soportadas
+// (models.DeviceRef lo implementa).
+type errorSink interface {
+	AddError(string)
+	AddUnsupported(string)
+}
 
 // gather ejecuta las lecturas de un endpoint. La primera hace de sonda: si
 // falla por transporte o auth (equipo caído, SOAP deshabilitado, credenciales
@@ -184,7 +200,11 @@ func (s *DefenseProService) gather(ctx context.Context, sink errorSink, tasks ..
 		}
 		failed++
 		if sink != nil {
-			sink.AddError(err.Error()) // ya incluye Servicio.operación
+			if isNotSupported(err) {
+				sink.AddUnsupported(tasks[i].name)
+			} else {
+				sink.AddError(err.Error()) // ya incluye Servicio.operación
+			}
 		}
 		entry := s.logCtx(ctx).WithField("op", tasks[i].name).WithError(err)
 		if isFault(err) {
@@ -204,6 +224,13 @@ func (s *DefenseProService) gather(ctx context.Context, sink errorSink, tasks ..
 func isFault(err error) bool {
 	var f *soap.Fault
 	return errors.As(err, &f)
+}
+
+// isNotSupported indica que la operación no existe en este modelo de equipo
+// (NoSuchInterfaceException: "this operation is not supported in current device").
+func isNotSupported(err error) bool {
+	var f *soap.Fault
+	return errors.As(err, &f) && strings.Contains(f.String, "NoSuchInterface")
 }
 
 func isNoSuchInstance(err error) bool {
@@ -232,7 +259,7 @@ func (s *DefenseProService) GetSystemInfo(ctx context.Context) (*models.SystemIn
 		s.scalar(soap.DeviceInformation, "get_BuildNumber", staticTTL, &out.BuildNumber),
 		s.scalar(soap.DeviceInformation, "get_rdwrDPVersion", staticTTL, &out.HardwareVersion),
 		s.scalar(soap.DeviceInformation, "get_SysBaseMACAddress", staticTTL, &out.BaseMACAddress),
-		s.scalar(soap.DeviceInformation, "get_RamSize", staticTTL, &out.RamSizeMB),
+		s.scalar(soap.DeviceInformation, "get_RamSize", staticTTL, &out.RamSize),
 		s.scalar(soap.DeviceMitigation, "get_Device", staticTTL, &out.MitigationMode),
 		s.scalar(soap.SecurityOperation, "get_Device", staticTTL, &out.OperationMode),
 		s.scalar(soap.DeviceHighAvailability, "get_haProtectionState", statsTTL, &out.HAProtectionState),

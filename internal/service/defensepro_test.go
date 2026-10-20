@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"defensepro-api/internal/models"
+	"defensepro-api/internal/soap"
 )
 
 var opRe = regexp.MustCompile(`<ns1:(\w+) xmlns:ns1="radware\.([^"]+)">`)
@@ -101,7 +103,7 @@ func TestGetSystemInfo(t *testing.T) {
 		"Device.SystemParameters#get_SystemUpTime": val("12 days, 03:10:22"),
 		"Device.SystemParameters#get_DeviceName":   val("DP-CORE-1"),
 		"Device.Information#get_SoftwareVersion":   val("8.34.2.0"),
-		"Device.Information#get_RamSize":           val("65536"),
+		"Device.Information#get_RamSize":           val("32"),
 		"Device.Mitigation#get_Device":             val("Behavioral"),
 		"Management.VersionControl#getAll_SoftwareVersion": tbl(
 			"<Index>1</Index><Name>img1</Name><Version>8.34.2.0</Version><ActiveStatus>YES</ActiveStatus><Valid>YES</Valid>",
@@ -113,7 +115,7 @@ func TestGetSystemInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.SysName != "DP-CORE-1" || out.SoftwareVersion != "8.34.2.0" || out.RamSizeMB != 65536 ||
+	if out.SysName != "DP-CORE-1" || out.SoftwareVersion != "8.34.2.0" || out.RamSize != 32 ||
 		out.MitigationMode != "Behavioral" || out.UpTime != "12 days, 03:10:22" {
 		t.Errorf("mapeo incorrecto: %+v", out)
 	}
@@ -344,5 +346,34 @@ func TestGateSerializesWithGap(t *testing.T) {
 	cancel()
 	if err := g.acquire(ctx); err == nil {
 		t.Error("acquire con contexto cancelado debió fallar")
+	}
+}
+
+// Una operación que el modelo no tiene va a "unsupported" (no a "errors") y
+// no se vuelve a preguntar al equipo.
+func TestUnsupportedOpIsRememberedAndNotAnError(t *testing.T) {
+	s, fake := newTestService(t, map[string]string{
+		"Device.SystemParameters#get_SystemUpTime": val("1 day"),
+		"Device.Mitigation#get_Device":             "FAULT:NoSuchInterfaceException: while processing get_Device request - this operation is not supported in current device.",
+	})
+	out, err := s.GetSystemInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(out.Unsupported, "Device.Mitigation.get_Device") {
+		t.Errorf("unsupported = %v", out.Unsupported)
+	}
+	for _, e := range out.Errors {
+		if strings.Contains(e, "Device.Mitigation") {
+			t.Errorf("no soportada no debe ir en errors: %q", e)
+		}
+	}
+
+	before := fake.calls.Load()
+	if _, err := s.call(context.Background(), 0, soap.DeviceMitigation, "get_Device"); !isNotSupported(err) {
+		t.Errorf("err = %v, want no soportada", err)
+	}
+	if fake.calls.Load() != before {
+		t.Error("la operación no soportada se volvió a pedir al equipo")
 	}
 }
