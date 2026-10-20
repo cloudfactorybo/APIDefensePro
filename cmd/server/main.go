@@ -122,6 +122,7 @@ func main() {
 	v1.HandleFunc("/protections", apiHandler.Protections).Methods(http.MethodGet)
 	v1.HandleFunc("/profiles", apiHandler.Profiles).Methods(http.MethodGet)
 	v1.HandleFunc("/behavioral", apiHandler.Behavioral).Methods(http.MethodGet)
+	v1.HandleFunc("/behavioral/traffic", apiHandler.BehavioralTraffic).Methods(http.MethodGet)
 	v1.HandleFunc("/analytics", apiHandler.Analytics).Methods(http.MethodGet)
 	v1.HandleFunc("/networks", apiHandler.Networks).Methods(http.MethodGet)
 	v1.HandleFunc("/blocklists", apiHandler.AccessLists).Methods(http.MethodGet)

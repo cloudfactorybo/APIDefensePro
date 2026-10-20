@@ -61,8 +61,11 @@ func (s *DefenseProService) logCtx(ctx context.Context) *logrus.Entry {
 
 // call ejecuta una operación SOAP. Con ttl > 0 cachea el XML crudo en Redis;
 // sólo se cachean respuestas válidas (un Fault nunca llega al Set).
-func (s *DefenseProService) call(ctx context.Context, ttl time.Duration, svc soap.Service, op string) (*soap.Response, error) {
+func (s *DefenseProService) call(ctx context.Context, ttl time.Duration, svc soap.Service, op string, params ...soap.Param) (*soap.Response, error) {
 	key := s.name + ":" + svc.Name() + "#" + op
+	for _, p := range params {
+		key += "|" + p.Name + "=" + p.Value
+	}
 	if ttl > 0 {
 		if cached, ok := s.cache.Get(key); ok {
 			if resp, err := soap.Decode(cached); err == nil {
@@ -77,7 +80,7 @@ func (s *DefenseProService) call(ctx context.Context, ttl time.Duration, svc soa
 		return nil, ctx.Err()
 	}
 	start := time.Now()
-	body, err := s.client.Call(ctx, svc, op)
+	body, err := s.client.Call(ctx, svc, op, params...)
 	<-s.sem
 
 	if err != nil {

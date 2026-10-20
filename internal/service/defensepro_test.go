@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,8 +25,11 @@ var opRe = regexp.MustCompile(`<ns1:(\w+) xmlns:ns1="radware\.([^"]+)">`)
 // no soporta la función).
 type fakeDP struct {
 	parts map[string]string
+	cli   map[string]string // comando CLI → salida (CLI.Command apply_CLICommand)
 	calls atomic.Int64
 }
+
+var cmdRe = regexp.MustCompile(`<command[^>]*>([^<]*)</command>`)
 
 func (f *fakeDP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.calls.Add(1)
@@ -39,6 +43,19 @@ func (f *fakeDP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/xml")
 	parts, ok := f.parts[svc+"#"+op]
+	if op == "apply_CLICommand" {
+		cmd := ""
+		if m := cmdRe.FindSubmatch(body); m != nil {
+			cmd = string(m[1])
+		}
+		out, found := f.cli[cmd]
+		if !found {
+			out = "Error - Usage: comando desconocido en el fake: " + cmd
+		}
+		var esc strings.Builder
+		_ = xml.EscapeText(&esc, []byte(out))
+		parts, ok = "<output>"+esc.String()+"</output>", true
+	}
 	if strings.HasPrefix(parts, "FAULT:") {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>SOAP-ENV:Client</faultcode><faultstring>%s</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>`, strings.TrimPrefix(parts, "FAULT:"))

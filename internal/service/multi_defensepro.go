@@ -256,6 +256,12 @@ func (m *MultiDefenseProService) GetAllBehavioral(ctx context.Context, names []s
 	})
 }
 
+func (m *MultiDefenseProService) GetAllBehavioralTraffic(ctx context.Context, names []string, policy string) ([]models.BehavioralTraffic, []DeviceError) {
+	return fanOut(ctx, m, names, "behavioral-traffic", func(s *DefenseProService, ctx context.Context) (*models.BehavioralTraffic, error) {
+		return s.GetBehavioralTraffic(ctx, policy)
+	})
+}
+
 func (m *MultiDefenseProService) GetAllAnalytics(ctx context.Context, names []string, f models.AttackFilter, top int) ([]models.Analytics, []DeviceError) {
 	return fanOut(ctx, m, names, "analytics", func(s *DefenseProService, ctx context.Context) (*models.Analytics, error) {
 		return s.GetAnalytics(ctx, f, top)

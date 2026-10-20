@@ -142,6 +142,7 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 | `GET` | `/api/v1/geo` | Reglas geo dinámicas y temporales por política, países asociados a cada perfil e IPs excluidas | 10 s – 1 min |
 | `GET` | `/api/v1/capacity` | Uso vs. capacidad de la session table, suspend table y tablas de autenticación TCP/HTTP; límites de políticas y tablas internas | 10 s – 10 min |
 | `GET` | `/api/v1/management` | Auditoría de gestión: HTTP/HTTPS/SSH/Telnet y sus puertos, cifrados débiles, método de autenticación, NTP, DNS, syslog y usuarios (sin contraseñas) | 1 min ² |
+| `GET` | `/api/v1/behavioral/traffic` | Métricas en tiempo real de una política (como BDoS/DNS Traffic Monitoring del Vision): baseline, tráfico actual, descartado y legítimo de BDoS por protocolo (entrada/salida, IPv4/IPv6, estado de aprendizaje y anomalía) y de DNS por tipo de consulta. `?policy=` obligatorio | 10 s |
 | `GET` | `/api/v1/analytics` | Network analytics: tráfico total y por puerto, utilización por política y agregados del log (top ataques, orígenes, destinos, puertos y políticas) | 5 s – 10 s |
 
 ¹ Uptime, fecha y hora se leen siempre en vivo.
@@ -410,6 +411,7 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | `geo` | `Security.GeoPolicyDynamicRule` getAll_GeoPolicyDynamicRule · `Security.GeoPolicyTemporaryRule` getAll_GeoPolicyTemporaryRule · `Security.GeoAssocCountries` getAll_GeoAssocCountriesEntry · `Security.GeoExcludedIPList` getAll_GeoExcludedIPListEntry |
 | `capacity` | `Device.SessionTable` get_UsedEntriesNumber · `Device.Tuning` get_SessionsCurrent · `Security.SuspendTable` get_SuspendTableEntries · `Security.AuthenticationTables` get_Tcp/HttpAuthenticationTableUtilization · `Security.Policy` get_TotalPolicyNum, HwEntriesUtil, SubPolicyUtil · `Security.Tuning`: \*Current y tamaños de tablas de autenticación |
 | `management` | `Management.Web`, `Management.Ssh`, `Management.Telnet`: estado y puertos · `Management.Access`: get_UserAuthentication, RadiusServer, TacacsMainServerIP, getAll_User · `Management.Services`: NTP · `Device.DNSClient` · `Management.Reporting` get_SyslogGlobalStatus · `Management.SyslogServers` getAll_SyslogServersTable |
+| `behavioral/traffic` | `Security.Policy` getAll_Policy (valida la política) · `CLI.Command` apply_CLICommand con los comandos fijos `system internal security bdos statistics get <política>` y `system internal security dns statistics get <política>`. La salida de texto se convierte a JSON; sólo se aceptan nombres que existen en el equipo |
 | `analytics` | `Device.Statistics`: get_TotalLastSecMbits, getAll_PortLastSec · `Device.HardwareInfo`: get_TotalLastSecPeak · `Security.PolicyUtil`: getAll_PolicyUtil · `Security.Reporting`: getAll_Log |
 | `protections` | get_Status de `Security.BehavioralDoS`, `SynProtection`, `HTTPSFloodProtection`, `AntiScanning`, `SignatureProtection` (+ get_DosShieldStatus), `ErtAttackersFeedStatus` · `Security.StatefulInspection`: get_status · `Security.DnsProtection`: get_DnsProtectionGlobalStatus · `Security.BehavioralDoS`: getAll_Profiles |
 
