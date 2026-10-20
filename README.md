@@ -137,9 +137,15 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 | `GET` | `/api/v1/protections` | Estado global de cada módulo de protección y perfiles BDoS | 1 min |
 | `GET` | `/api/v1/profiles` | Perfiles de protección por módulo (BDoS, DNS, SYN, HTTPS flood, out-of-state, anti-scanning, traffic filters, geo, ERT, QDoS, PPS, connection limit). Filtro `?type=` | 1 min |
 | `GET` | `/api/v1/behavioral` | Behavioral protections: estado y aprendizaje de BDoS y DNS, sus perfiles, tráfico de puertos excluidos por política (bps/pps promedio y pico) y ataques behavioral | 5 s – 1 min |
+| `GET` | `/api/v1/networks` | Clases de red (nombre → IPs/máscaras) que usan las políticas como origen o destino. Filtro `?name=` | 1 min |
+| `GET` | `/api/v1/blocklists` | Listas de bloqueo (incluidas las dinámicas con su expiración) y de permitidos | 10 s – 1 min |
+| `GET` | `/api/v1/geo` | Reglas geo dinámicas y temporales por política, países asociados a cada perfil e IPs excluidas | 10 s – 1 min |
+| `GET` | `/api/v1/capacity` | Uso vs. capacidad de la session table, suspend table y tablas de autenticación TCP/HTTP; límites de políticas y tablas internas | 10 s – 10 min |
+| `GET` | `/api/v1/management` | Auditoría de gestión: HTTP/HTTPS/SSH/Telnet y sus puertos, cifrados débiles, método de autenticación, NTP, DNS, syslog y usuarios (sin contraseñas) | 1 min ² |
 | `GET` | `/api/v1/analytics` | Network analytics: tráfico total y por puerto, utilización por política y agregados del log (top ataques, orígenes, destinos, puertos y políticas) | 5 s – 10 s |
 
 ¹ Uptime, fecha y hora se leen siempre en vivo.
+² La tabla de usuarios se lee siempre en vivo y nunca se cachea, porque el equipo la entrega con el campo de contraseña. Ese campo no se expone.
 
 ### Filtros de `/api/v1/attacks`
 
@@ -190,6 +196,12 @@ curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/profiles?type=bdos,dns" |
 
 # Behavioral protections con los ataques en curso
 curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/behavioral?type=started,ongoing" | jq
+
+# Qué IPs hay detrás de la clase de red "DNS" que usa Pol_DNS
+curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/networks?name=DNS" | jq
+
+# ¿Alguna tabla cerca de llenarse?
+curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/capacity" | jq
 
 # Analytics: top 5 de una política
 curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/analytics?policy=Pol_WWW&top=5" | jq
@@ -391,6 +403,11 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | `suspended` | `Security.SuspendTable`: getAll_NewerSuspend |
 | `profiles` | `Security.BehavioralDoS` getAll_Profiles · `Security.DnsProtection` getAll_DnsProtectionProfile · `Security.SynProtection` getAll_rsIDSSynProfilesParamsEntry · `Security.HTTPSFloodProtection` getAll_HttpsFloodProfileEntry · `Security.OutOfState` getAll_Profile · `Security.AntiScanning` getAll_AntiScanningProfiles · `Security.TrafficFilter` getAll_TrafficFilterProfile · `Security.GeoProfiles` getAll_GeoProfileEntry · `Security.ErtAttackersFeedProtection` getAll_ErtAttackersFeedProfileEntry · `Security.QdosProfiles` getAll_QdosProfileEntry · `Security.PpsRateLimit` getAll_rsPpsRateLimitProfile · `Security.ConnectionLimit` getAll_Profile |
 | `behavioral` | `Security.BehavioralDoS`: get_Status, LearningResponsePeriod, overBlockingStatus, SamplingStatus, getAll_Profiles, getAll_rsNetFloodBypassEntry · `Security.DnsProtection`: get_DnsProtectionGlobalStatus, DnsProtectionLearningResponsePeriod, getAll_DnsProtectionProfile · `Security.bdosExcludedStatistics`: getAll_rsBdosExcludedStatisticsTableEntry · `Security.Reporting`: getAll_Log |
+| `networks` | `Classes.Networks`: getAll_ActiveNetwork (o getAll_Network si la activa está vacía) |
+| `blocklists` | `Security.AccessLists`: getAll_BlackList, getAll_WhiteList |
+| `geo` | `Security.GeoPolicyDynamicRule` getAll_GeoPolicyDynamicRule · `Security.GeoPolicyTemporaryRule` getAll_GeoPolicyTemporaryRule · `Security.GeoAssocCountries` getAll_GeoAssocCountriesEntry · `Security.GeoExcludedIPList` getAll_GeoExcludedIPListEntry |
+| `capacity` | `Device.SessionTable` get_UsedEntriesNumber · `Device.Tuning` get_SessionsCurrent · `Security.SuspendTable` get_SuspendTableEntries · `Security.AuthenticationTables` get_Tcp/HttpAuthenticationTableUtilization · `Security.Policy` get_TotalPolicyNum, HwEntriesUtil, SubPolicyUtil · `Security.Tuning`: \*Current y tamaños de tablas de autenticación |
+| `management` | `Management.Web`, `Management.Ssh`, `Management.Telnet`: estado y puertos · `Management.Access`: get_UserAuthentication, RadiusServer, TacacsMainServerIP, getAll_User · `Management.Services`: NTP · `Device.DNSClient` · `Management.Reporting` get_SyslogGlobalStatus · `Management.SyslogServers` getAll_SyslogServersTable |
 | `analytics` | `Device.Statistics`: get_TotalLastSecMbits, getAll_PortLastSec · `Device.HardwareInfo`: get_TotalLastSecPeak · `Security.PolicyUtil`: getAll_PolicyUtil · `Security.Reporting`: getAll_Log |
 | `protections` | get_Status de `Security.BehavioralDoS`, `SynProtection`, `HTTPSFloodProtection`, `AntiScanning`, `SignatureProtection` (+ get_DosShieldStatus), `ErtAttackersFeedStatus` · `Security.StatefulInspection`: get_status · `Security.DnsProtection`: get_DnsProtectionGlobalStatus · `Security.BehavioralDoS`: getAll_Profiles |
 
@@ -438,6 +455,7 @@ Las pruebas no necesitan un equipo real: usan un DefensePro simulado (`httptest`
 ## Seguridad
 
 - La API es **de sólo lectura**: únicamente ejecuta operaciones `get_*` / `getAll_*`. El servicio `CLI.Command` del DefensePro, que permite ejecutar comandos arbitrarios, no se expone de forma intencional.
+- Nunca se leen secretos del equipo (claves RADIUS/TACACS+). La tabla de usuarios trae contraseñas: ese campo no se mapea y la respuesta no se cachea.
 - Los tokens se guardan hasheados con SHA-256 y sólo se muestran al crearlos.
 - Por defecto el puerto público sólo escucha en loopback y TLS exige al menos TLS 1.2.
 - Las credenciales de los equipos se almacenan en PostgreSQL: protege el acceso al host y a los volúmenes de Docker.

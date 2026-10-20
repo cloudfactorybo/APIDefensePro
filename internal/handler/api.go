@@ -175,6 +175,42 @@ func (h *APIHandler) Protections(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Networks acepta ?name=a,b para filtrar clases de red por nombre.
+func (h *APIHandler) Networks(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllNetworks(r.Context(), devices, parseCSVParam(r, "name"))
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) AccessLists(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllAccessLists(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) Geo(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllGeo(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) Capacity(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllCapacity(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) Management(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllManagement(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
 // devices lee ?device= y responde 404 si algún nombre no es un equipo activo.
 func (h *APIHandler) devices(w http.ResponseWriter, r *http.Request) ([]string, bool) {
 	names := parseCSVParam(r, "device")

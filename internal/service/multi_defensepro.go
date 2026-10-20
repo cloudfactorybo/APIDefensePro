@@ -262,6 +262,28 @@ func (m *MultiDefenseProService) GetAllAnalytics(ctx context.Context, names []st
 	})
 }
 
+func (m *MultiDefenseProService) GetAllNetworks(ctx context.Context, names, networks []string) ([]models.Networks, []DeviceError) {
+	return fanOut(ctx, m, names, "networks", func(s *DefenseProService, ctx context.Context) (*models.Networks, error) {
+		return s.GetNetworks(ctx, networks)
+	})
+}
+
+func (m *MultiDefenseProService) GetAllAccessLists(ctx context.Context, names []string) ([]models.AccessLists, []DeviceError) {
+	return fanOut(ctx, m, names, "blocklists", (*DefenseProService).GetAccessLists)
+}
+
+func (m *MultiDefenseProService) GetAllGeo(ctx context.Context, names []string) ([]models.Geo, []DeviceError) {
+	return fanOut(ctx, m, names, "geo", (*DefenseProService).GetGeo)
+}
+
+func (m *MultiDefenseProService) GetAllCapacity(ctx context.Context, names []string) ([]models.Capacity, []DeviceError) {
+	return fanOut(ctx, m, names, "capacity", (*DefenseProService).GetCapacity)
+}
+
+func (m *MultiDefenseProService) GetAllManagement(ctx context.Context, names []string) ([]models.Management, []DeviceError) {
+	return fanOut(ctx, m, names, "management", (*DefenseProService).GetManagement)
+}
+
 func (m *MultiDefenseProService) GetAllProtections(ctx context.Context, names []string) ([]models.Protections, []DeviceError) {
 	return fanOut(ctx, m, names, "protections", (*DefenseProService).GetProtections)
 }

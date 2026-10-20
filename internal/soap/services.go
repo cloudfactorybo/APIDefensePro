@@ -53,6 +53,25 @@ var (
 	SecurityQdosProfiles       = Service{"radware.Security.QdosProfiles", "SecurityQdosProfilesAction"}
 	SecurityPpsRateLimit       = Service{"radware.Security.PpsRateLimit", "SecurityPpsRateLimitAction"}
 	SecurityConnectionLimit    = Service{"radware.Security.ConnectionLimit", "SecurityConnectionLimitAction"}
+	SecurityAccessLists        = Service{"radware.Security.AccessLists", "SecurityAccessListsAction"}
+	SecurityGeoDynamicRule     = Service{"radware.Security.GeoPolicyDynamicRule", "SecurityGeoPolicyDynamicRuleAction"}
+	SecurityGeoTemporaryRule   = Service{"radware.Security.GeoPolicyTemporaryRule", "SecurityGeoPolicyTemporaryRuleAction"}
+	SecurityGeoExcludedIPs     = Service{"radware.Security.GeoExcludedIPList", "SecurityGeoExcludedIPListAction"}
+	SecurityGeoCountries       = Service{"radware.Security.GeoAssocCountries", "SecurityGeoAssocCountriesAction"}
+	SecurityTuning             = Service{"radware.Security.Tuning", "SecurityTuningAction"}
+	SecurityAuthTables         = Service{"radware.Security.AuthenticationTables", "SecurityAuthenticationTablesAction"}
+
+	DeviceTuning    = Service{"radware.Device.Tuning", "DeviceTuningAction"}
+	DeviceDNSClient = Service{"radware.Device.DNSClient", "DeviceDNSClientAction"}
+	ClassesNetworks = Service{"radware.Classes.Networks", "ClassesNetworksAction"}
+
+	ManagementWeb           = Service{"radware.Management.Web", "ManagementWebAction"}
+	ManagementSsh           = Service{"radware.Management.Ssh", "ManagementSshAction"}
+	ManagementTelnet        = Service{"radware.Management.Telnet", "ManagementTelnetAction"}
+	ManagementServices      = Service{"radware.Management.Services", "ManagementServicesAction"}
+	ManagementSyslogServers = Service{"radware.Management.SyslogServers", "ManagementSyslogServersAction"}
+	ManagementReporting     = Service{"radware.Management.Reporting", "ManagementReportingAction"}
+	ManagementAccess        = Service{"radware.Management.Access", "ManagementAccessAction"}
 )
 
 var registry = map[string]Service{}
@@ -68,7 +87,11 @@ func init() {
 		SecurityDnsProtection, SecurityHTTPSFlood, SecurityAntiScanning, SecuritySignatures,
 		SecurityStatefulInspection, SecurityErtFeedStatus, SecurityErtFeedProtection,
 		SecurityBdosExcludedStats, SecurityOutOfState, SecurityTrafficFilter, SecurityGeoProfiles,
-		SecurityQdosProfiles, SecurityPpsRateLimit, SecurityConnectionLimit,
+		SecurityQdosProfiles, SecurityPpsRateLimit, SecurityConnectionLimit, SecurityAccessLists,
+		SecurityGeoDynamicRule, SecurityGeoTemporaryRule, SecurityGeoExcludedIPs, SecurityGeoCountries,
+		SecurityTuning, SecurityAuthTables, DeviceTuning, DeviceDNSClient, ClassesNetworks,
+		ManagementWeb, ManagementSsh, ManagementTelnet, ManagementServices, ManagementSyslogServers,
+		ManagementReporting, ManagementAccess,
 	} {
 		registry[strings.ToLower(s.Name())] = s
 	}

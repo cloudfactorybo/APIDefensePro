@@ -123,6 +123,11 @@ func main() {
 	v1.HandleFunc("/profiles", apiHandler.Profiles).Methods(http.MethodGet)
 	v1.HandleFunc("/behavioral", apiHandler.Behavioral).Methods(http.MethodGet)
 	v1.HandleFunc("/analytics", apiHandler.Analytics).Methods(http.MethodGet)
+	v1.HandleFunc("/networks", apiHandler.Networks).Methods(http.MethodGet)
+	v1.HandleFunc("/blocklists", apiHandler.AccessLists).Methods(http.MethodGet)
+	v1.HandleFunc("/geo", apiHandler.Geo).Methods(http.MethodGet)
+	v1.HandleFunc("/capacity", apiHandler.Capacity).Methods(http.MethodGet)
+	v1.HandleFunc("/management", apiHandler.Management).Methods(http.MethodGet)
 
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{
