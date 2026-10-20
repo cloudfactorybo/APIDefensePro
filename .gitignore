@@ -1,0 +1,15 @@
+# Configuración local con credenciales
+.env
+
+# Certificados TLS generados por scripts/gen-certs.sh
+traefik/certs/*.pem
+
+# Documentación de Radware y código Alteon anterior (sólo locales)
+/DefensePro_v8-34-2-0_CLI_Reference_Manual/
+/DefensePro_v8-34-2-0_SOAP_API.rar/
+/_legacy_alteon/
+
+# Binarios compilados
+/defensepro-api
+/defensepro-admin
+*.exe

@@ -1,0 +1,98 @@
+name: defensepro-api
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-defensepro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-defensepro}
+      POSTGRES_DB: ${POSTGRES_DB:-defensepro}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-defensepro} -d ${POSTGRES_DB:-defensepro}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server --appendonly yes
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  app:
+    build: .
+    image: defensepro-api:local
+    restart: unless-stopped
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-defensepro}:${POSTGRES_PASSWORD:-defensepro}@postgres:5432/${POSTGRES_DB:-defensepro}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      AUTH_DISABLED: ${AUTH_DISABLED:-}
+      DEVICE_MAX_CONCURRENCY: ${DEVICE_MAX_CONCURRENCY:-4}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.defensepro.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.defensepro.entrypoints=websecure"
+      - "traefik.http.routers.defensepro.tls=true"
+      - "traefik.http.services.defensepro.loadbalancer.server.port=8080"
+
+  traefik:
+    image: traefik:v3.6.1
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--log.level=INFO"
+      - "--accesslog=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=defensepro-api_internal"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.websecure.address=:5687"
+    ports:
+      # Bind sólo a loopback: el puerto no es alcanzable desde la LAN ni internet.
+      # Para exponer a toda la red cambia "127.0.0.1:" por "0.0.0.0:" (o quítalo).
+      - "127.0.0.1:${PUBLIC_HTTPS_PORT:-5687}:5687"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/certs:/etc/traefik/certs:ro
+    depends_on:
+      - app
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  internal:
+    driver: bridge
