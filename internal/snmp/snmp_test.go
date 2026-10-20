@@ -2,11 +2,15 @@ package snmp
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/gosnmp/gosnmp"
 )
 
 func TestAllowlist(t *testing.T) {
@@ -146,5 +150,36 @@ func TestPDUConversions(t *testing.T) {
 	}
 	if (PDU{Kind: KindInt, Int: -1}).Uint64() != 0 {
 		t.Error("negativo a uint")
+	}
+}
+
+// El DefensePro devuelve tablas indexadas por nombre fuera de orden
+// lexicográfico (Pol_Pagotarjetas antes que Pol_Canalexterno): el collector
+// debe aceptarlas, cortar si el agente repite un OID y acotar el total.
+func TestWalkCollector(t *testing.T) {
+	pdu := func(name string) gosnmp.SnmpPDU {
+		return gosnmp.SnmpPDU{Name: name, Type: gosnmp.Integer, Value: 1}
+	}
+	w := &walkCollector{seen: map[string]bool{}}
+	base := ".1.3.6.1.4.1.89.35.1.65.188.4.1.1.1."
+	for _, idx := range []string{"16.80.97.103", "16.67.97.110", "7.80.111.108"} { // no crecientes
+		if err := w.add(pdu(base + idx)); err != nil {
+			t.Fatalf("OID fuera de orden rechazado: %v", err)
+		}
+	}
+	if err := w.add(pdu(base + "16.80.97.103")); !errors.Is(err, errWalkCycle) {
+		t.Errorf("OID repetido = %v, want errWalkCycle", err)
+	}
+	if len(w.out) != 3 {
+		t.Errorf("out = %d PDUs", len(w.out))
+	}
+
+	big := &walkCollector{seen: map[string]bool{}}
+	var err error
+	for n := 0; n <= maxWalkPDUs && err == nil; n++ {
+		err = big.add(pdu(base + strconv.Itoa(n)))
+	}
+	if err == nil || errors.Is(err, errWalkCycle) {
+		t.Errorf("el tope de %d OIDs no se aplicó: %v", maxWalkPDUs, err)
 	}
 }

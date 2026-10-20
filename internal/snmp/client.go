@@ -2,6 +2,7 @@ package snmp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -180,6 +181,35 @@ func (c *Client) Get(ctx context.Context, oids []string) (map[string]PDU, error)
 	return out, nil
 }
 
+// maxWalkPDUs acota un walk (la tabla más grande que se lee tiene ~1.350).
+const maxWalkPDUs = 20000
+
+var errWalkCycle = errors.New("ciclo en el walk")
+
+// walkCollector junta los PDUs de un walk que NO exige OIDs crecientes: el
+// DefensePro devuelve las tablas indexadas por nombre (p.ej. políticas) en su
+// orden interno, no en orden lexicográfico, y el chequeo estándar aborta. Sin
+// ese chequeo un agente podría ciclar, así que un OID repetido corta el walk
+// (ya se recorrió todo) y un tope evita agotar la memoria.
+type walkCollector struct {
+	seen map[string]bool
+	out  []PDU
+}
+
+func (w *walkCollector) add(v gosnmp.SnmpPDU) error {
+	if w.seen[v.Name] {
+		return errWalkCycle
+	}
+	if len(w.seen) >= maxWalkPDUs {
+		return fmt.Errorf("walk excede %d OIDs", maxWalkPDUs)
+	}
+	w.seen[v.Name] = true
+	if p, ok := normalize(v); ok {
+		w.out = append(w.out, p)
+	}
+	return nil
+}
+
 // Walk lee un subárbol completo con GETBULK.
 func (c *Client) Walk(ctx context.Context, root string) ([]PDU, error) {
 	if err := checkAllowed(root); err != nil {
@@ -191,17 +221,12 @@ func (c *Client) Walk(ctx context.Context, root string) ([]PDU, error) {
 	}
 	defer g.Conn.Close()
 
-	vars, err := g.BulkWalkAll(root)
-	if err != nil {
+	g.AppOpts = map[string]any{"c": true} // equivale a snmpbulkwalk -Cc
+	w := &walkCollector{seen: map[string]bool{}}
+	if err := g.BulkWalk(root, w.add); err != nil && !errors.Is(err, errWalkCycle) {
 		return nil, fmt.Errorf("snmp walk %s: %w", root, err)
 	}
-	out := make([]PDU, 0, len(vars))
-	for _, v := range vars {
-		if p, ok := normalize(v); ok {
-			out = append(out, p)
-		}
-	}
-	return out, nil
+	return w.out, nil
 }
 
 func normalize(v gosnmp.SnmpPDU) (PDU, bool) {
