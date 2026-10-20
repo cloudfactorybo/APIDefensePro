@@ -1,22 +1,32 @@
 package service
 
 import (
+	"cmp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"defensepro-api/internal/models"
 )
 
-// buildAttacks filtra el log de seguridad, calcula el resumen sobre todo lo
-// filtrado y devuelve las entradas más recientes primero (AttackIndex es la
-// clave creciente de la tabla), recortadas a f.Limit.
-func buildAttacks(entries []models.Attack, f models.AttackFilter) *models.Attacks {
+// attackMatcher devuelve una función que indica si una entrada pasa el filtro.
+func attackMatcher(f models.AttackFilter) func(models.Attack) bool {
 	risks := toSet(f.Risks)
 	categories := toSet(f.Categories)
 	actions := toSet(f.Actions)
 	types := toSet(f.Types)
 	policies := toSet(f.Policies)
+	return func(a models.Attack) bool {
+		return matches(risks, a.Risk) && matches(categories, a.Category) && matches(actions, a.Action) &&
+			matches(types, a.Type) && matches(policies, a.PolicyName)
+	}
+}
 
+// buildAttacks filtra el log de seguridad, calcula el resumen sobre todo lo
+// filtrado y devuelve las entradas más recientes primero (AttackIndex es la
+// clave creciente de la tabla), recortadas a f.Limit.
+func buildAttacks(entries []models.Attack, f models.AttackFilter) *models.Attacks {
+	match := attackMatcher(f)
 	summary := models.AttackSummary{
 		ByRisk:     map[string]int{},
 		ByCategory: map[string]int{},
@@ -26,8 +36,7 @@ func buildAttacks(entries []models.Attack, f models.AttackFilter) *models.Attack
 
 	selected := make([]models.Attack, 0, len(entries))
 	for _, a := range entries {
-		if !matches(risks, a.Risk) || !matches(categories, a.Category) || !matches(actions, a.Action) ||
-			!matches(types, a.Type) || !matches(policies, a.PolicyName) {
+		if !match(a) {
 			continue
 		}
 		selected = append(selected, a)
@@ -38,13 +47,7 @@ func buildAttacks(entries []models.Attack, f models.AttackFilter) *models.Attack
 	}
 
 	slices.SortStableFunc(selected, func(x, y models.Attack) int {
-		switch {
-		case x.Index > y.Index:
-			return -1
-		case x.Index < y.Index:
-			return 1
-		}
-		return 0
+		return cmp.Compare(y.Index, x.Index)
 	})
 
 	summary.Total = len(selected)
@@ -54,6 +57,95 @@ func buildAttacks(entries []models.Attack, f models.AttackFilter) *models.Attack
 	summary.Returned = len(selected)
 
 	return &models.Attacks{Summary: summary, Attacks: selected}
+}
+
+// analyzeAttacks agrega el log filtrado: totales, distribuciones y los top N
+// por ataque, origen, destino, puerto destino y política. f.Limit se ignora.
+func analyzeAttacks(entries []models.Attack, f models.AttackFilter, top int) models.AttackAnalytics {
+	match := attackMatcher(f)
+	out := models.AttackAnalytics{
+		ByRisk:     map[string]int{},
+		ByCategory: map[string]int{},
+		ByAction:   map[string]int{},
+		ByType:     map[string]int{},
+		ByProtocol: map[string]int{},
+	}
+	names := map[string]*models.TopItem{}
+	sources := map[string]*models.TopItem{}
+	destinations := map[string]*models.TopItem{}
+	ports := map[string]*models.TopItem{}
+	policies := map[string]*models.TopItem{}
+
+	var oldest, newest *models.Attack
+	for i := range entries {
+		a := &entries[i]
+		if !match(*a) {
+			continue
+		}
+		out.TotalEntries++
+		out.TotalPackets += a.PacketCount
+		out.TotalBytes += a.ByteCount
+		out.ByRisk[a.Risk]++
+		out.ByCategory[a.Category]++
+		out.ByAction[a.Action]++
+		out.ByType[a.Type]++
+		out.ByProtocol[a.Protocol]++
+
+		addTop(names, a.Name, a)
+		addTop(sources, a.SourceAddress, a)
+		addTop(destinations, a.DestinationAddress, a)
+		addTop(policies, a.PolicyName, a)
+		if a.DestinationPort > 0 {
+			addTop(ports, a.Protocol+"/"+strconv.FormatInt(a.DestinationPort, 10), a)
+		}
+
+		if oldest == nil || a.Index < oldest.Index {
+			oldest = a
+		}
+		if newest == nil || a.Index > newest.Index {
+			newest = a
+		}
+	}
+	if oldest != nil {
+		out.OldestTime = oldest.Time
+		out.NewestTime = newest.Time
+	}
+
+	out.TopAttacks = topN(names, top)
+	out.TopSources = topN(sources, top)
+	out.TopDestinations = topN(destinations, top)
+	out.TopDestinationPorts = topN(ports, top)
+	out.TopPolicies = topN(policies, top)
+	return out
+}
+
+func addTop(m map[string]*models.TopItem, key string, a *models.Attack) {
+	if key == "" {
+		return
+	}
+	it, ok := m[key]
+	if !ok {
+		it = &models.TopItem{Key: key}
+		m[key] = it
+	}
+	it.Count++
+	it.Packets += a.PacketCount
+	it.Bytes += a.ByteCount
+}
+
+// topN ordena por cantidad de eventos (desempate por clave) y corta en n.
+func topN(m map[string]*models.TopItem, n int) []models.TopItem {
+	out := make([]models.TopItem, 0, len(m))
+	for _, it := range m {
+		out = append(out, *it)
+	}
+	slices.SortFunc(out, func(a, b models.TopItem) int {
+		return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.Key, b.Key))
+	})
+	if n > 0 && len(out) > n {
+		out = out[:n]
+	}
+	return out
 }
 
 // toSet arma un set en minúsculas; nil si no hay valores (= sin filtro).

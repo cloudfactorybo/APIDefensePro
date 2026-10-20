@@ -47,8 +47,8 @@ type PolicyResource struct {
 
 // PolicyUtil es una fila de Security.PolicyUtil (sólo para el join).
 type PolicyUtil struct {
-	Name        string `soap:"PolicyName"`
-	Utilization int64  `soap:"PolicyUtil"`
+	Name        string `json:"policyName" soap:"PolicyName"`
+	Utilization int64  `json:"utilizationPercent" soap:"PolicyUtil"`
 }
 
 type Attacks struct {
@@ -162,4 +162,30 @@ type BDoSProfile struct {
 	FINACKFlood         string `json:"finAckFlood" soap:"FINACKFloodstatus"`
 	RSTFlood            string `json:"rstFlood" soap:"RSTFloodstatus"`
 	FragFlood           string `json:"fragFlood" soap:"FRAGFloodstatus"`
+
+	UserDefinedRateLimit     int64      `json:"userDefinedRateLimit" soap:"userDefinedRateLimit"`
+	UserDefinedRateLimitUnit string     `json:"userDefinedRateLimitUnit" soap:"userDefinedRateLimitUnit"`
+	OverMitigation           string     `json:"overMitigation" soap:"OverMitigationStatus"`
+	OverMitigationThreshold  int64      `json:"overMitigationThreshold" soap:"OverMitigationThreshold"`
+	LearningSuppression      int64      `json:"learningSuppressionThreshold" soap:"LearningSuppressionThreshold"`
+	TransparentOptimization  string     `json:"transparentOptimization" soap:"TransparentOptimization"`
+	AdvancedUDPDetection     string     `json:"advancedUdpDetection" soap:"AUDPFloodDetection"`
+	AdvancedUDPLearning      string     `json:"advancedUdpLearningPeriod" soap:"AUDPLearningPeriod"`
+	UDPExcludedPorts         string     `json:"udpExcludedPorts" soap:"UDPExlPorts"`
+	MaxAttackEdgeFactor      string     `json:"maxAttackEdgeFactor" soap:"MaxAttackEdgeFactor"`
+	Quotas                   BDoSQuotas `json:"quotas"`
+}
+
+// BDoSQuotas es el % del ancho de banda esperado por protocolo (in/out).
+type BDoSQuotas struct {
+	TCPIn      int64 `json:"tcpInQuota" soap:"TcpInQuota"`
+	TCPOut     int64 `json:"tcpOutQuota" soap:"TcpOutQuota"`
+	UDPIn      int64 `json:"udpInQuota" soap:"UdpInQuota"`
+	UDPOut     int64 `json:"udpOutQuota" soap:"UdpOutQuota"`
+	UDPFragIn  int64 `json:"udpFragInQuota" soap:"UdpFragInQuota"`
+	UDPFragOut int64 `json:"udpFragOutQuota" soap:"UdpFragOutQuota"`
+	ICMPIn     int64 `json:"icmpInQuota" soap:"IcmpInQuota"`
+	ICMPOut    int64 `json:"icmpOutQuota" soap:"IcmpOutQuota"`
+	IGMPIn     int64 `json:"igmpInQuota" soap:"IgmpInQuota"`
+	IGMPOut    int64 `json:"igmpOutQuota" soap:"IgmpOutQuota"`
 }

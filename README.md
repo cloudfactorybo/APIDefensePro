@@ -135,6 +135,9 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 | `GET` | `/api/v1/attacks` | Log de seguridad con filtros y resumen agregado | 5 s |
 | `GET` | `/api/v1/suspended` | Orígenes suspendidos o bloqueados | 10 s |
 | `GET` | `/api/v1/protections` | Estado global de cada módulo de protección y perfiles BDoS | 1 min |
+| `GET` | `/api/v1/profiles` | Perfiles de protección por módulo (BDoS, DNS, SYN, HTTPS flood, out-of-state, anti-scanning, traffic filters, geo, ERT, QDoS, PPS, connection limit). Filtro `?type=` | 1 min |
+| `GET` | `/api/v1/behavioral` | Behavioral protections: estado y aprendizaje de BDoS y DNS, sus perfiles, tráfico de puertos excluidos por política (bps/pps promedio y pico) y ataques behavioral | 5 s – 1 min |
+| `GET` | `/api/v1/analytics` | Network analytics: tráfico total y por puerto, utilización por política y agregados del log (top ataques, orígenes, destinos, puertos y políticas) | 5 s – 10 s |
 
 ¹ Uptime, fecha y hora se leen siempre en vivo.
 
@@ -153,6 +156,19 @@ Todos aceptan valores separados por coma y no distinguen mayúsculas.
 
 El `summary` se calcula sobre todo lo que pasa el filtro, antes de aplicar `limit`: `summary.total` cuenta las coincidencias y `summary.returned` las entradas devueltas.
 
+### Parámetros de `/profiles`, `/behavioral` y `/analytics`
+
+| Endpoint | Parámetro | Descripción |
+|---|---|---|
+| `/profiles` | `type` | Módulos a consultar (CSV): `bdos`, `dns`, `syn`, `https`, `oos`, `antiscanning`, `trafficfilters`, `geo`, `ert`, `qdos`, `pps`, `connectionlimit`. Sin el parámetro se consultan todos (12 llamadas SOAP); los módulos no pedidos no aparecen en la respuesta |
+| `/behavioral` | `bypass` | `true` agrega la tabla de bypass de BDoS |
+| `/behavioral` | filtros de `/attacks` | Se aplican a los ataques behavioral (`behavioral-doS` y `dns-protection` por defecto). `limit` default `50` |
+| `/analytics` | filtros de `/attacks` | Restringen los agregados (p. ej. `?policy=Pol_WWW`). `limit` no aplica; `policy` también filtra la utilización por política |
+| `/analytics` | `top` | Cantidad de elementos en cada ranking. Default `10`, máximo `100` |
+
+> [!NOTE]
+> Las gráficas de baseline vs. tráfico real por protocolo que muestra APSolute Vision no se exponen por la API SOAP del equipo, así que no están en `/behavioral`. `excludedPortsTraffic` corresponde al tráfico de los puertos UDP excluidos de BDoS.
+
 ### Ejemplos
 
 ```bash
@@ -168,6 +184,15 @@ curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/monitoring?device=DP-CORE
 
 # Una política concreta
 curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/policies?policy=Web" | jq
+
+# Perfiles BDoS y DNS
+curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/profiles?type=bdos,dns" | jq
+
+# Behavioral protections con los ataques en curso
+curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/behavioral?type=started,ongoing" | jq
+
+# Analytics: top 5 de una política
+curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/analytics?policy=Pol_WWW&top=5" | jq
 ```
 
 ### Formato de respuesta
@@ -364,6 +389,9 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | `policies` | `Security.Policy`: getAll_Policy, getAll_PoliciesResources, get_TotalPolicyNum, HwEntriesUtil, SubPolicyUtil, UpdatePoliciesRequired, UpdatePoliciesInProgress · `Security.PolicyUtil`: getAll_PolicyUtil |
 | `attacks` | `Security.Reporting`: getAll_Log |
 | `suspended` | `Security.SuspendTable`: getAll_NewerSuspend |
+| `profiles` | `Security.BehavioralDoS` getAll_Profiles · `Security.DnsProtection` getAll_DnsProtectionProfile · `Security.SynProtection` getAll_rsIDSSynProfilesParamsEntry · `Security.HTTPSFloodProtection` getAll_HttpsFloodProfileEntry · `Security.OutOfState` getAll_Profile · `Security.AntiScanning` getAll_AntiScanningProfiles · `Security.TrafficFilter` getAll_TrafficFilterProfile · `Security.GeoProfiles` getAll_GeoProfileEntry · `Security.ErtAttackersFeedProtection` getAll_ErtAttackersFeedProfileEntry · `Security.QdosProfiles` getAll_QdosProfileEntry · `Security.PpsRateLimit` getAll_rsPpsRateLimitProfile · `Security.ConnectionLimit` getAll_Profile |
+| `behavioral` | `Security.BehavioralDoS`: get_Status, LearningResponsePeriod, overBlockingStatus, SamplingStatus, getAll_Profiles, getAll_rsNetFloodBypassEntry · `Security.DnsProtection`: get_DnsProtectionGlobalStatus, DnsProtectionLearningResponsePeriod, getAll_DnsProtectionProfile · `Security.bdosExcludedStatistics`: getAll_rsBdosExcludedStatisticsTableEntry · `Security.Reporting`: getAll_Log |
+| `analytics` | `Device.Statistics`: get_TotalLastSecMbits, getAll_PortLastSec · `Device.HardwareInfo`: get_TotalLastSecPeak · `Security.PolicyUtil`: getAll_PolicyUtil · `Security.Reporting`: getAll_Log |
 | `protections` | get_Status de `Security.BehavioralDoS`, `SynProtection`, `HTTPSFloodProtection`, `AntiScanning`, `SignatureProtection` (+ get_DosShieldStatus), `ErtAttackersFeedStatus` · `Security.StatefulInspection`: get_status · `Security.DnsProtection`: get_DnsProtectionGlobalStatus · `Security.BehavioralDoS`: getAll_Profiles |
 
 > RAM y disco (`used`, `capacity`) se reportan en la unidad que entrega el equipo; el WSDL no la documenta.

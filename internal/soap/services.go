@@ -45,6 +45,14 @@ var (
 	SecuritySignatures         = Service{"radware.Security.SignatureProtection", "SecuritySignatureProtectionAction"}
 	SecurityStatefulInspection = Service{"radware.Security.StatefulInspection", "SecurityStatefulInspectionAction"}
 	SecurityErtFeedStatus      = Service{"radware.Security.ErtAttackersFeedStatus", "SecurityErtAttackersFeedStatusAction"}
+	SecurityErtFeedProtection  = Service{"radware.Security.ErtAttackersFeedProtection", "SecurityErtAttackersFeedProtectionAction"}
+	SecurityBdosExcludedStats  = Service{"radware.Security.bdosExcludedStatistics", "SecurityBdosExcludedStatisticsAction"}
+	SecurityOutOfState         = Service{"radware.Security.OutOfState", "SecurityOutOfStateAction"}
+	SecurityTrafficFilter      = Service{"radware.Security.TrafficFilter", "SecurityTrafficFilterAction"}
+	SecurityGeoProfiles        = Service{"radware.Security.GeoProfiles", "SecurityGeoProfilesAction"}
+	SecurityQdosProfiles       = Service{"radware.Security.QdosProfiles", "SecurityQdosProfilesAction"}
+	SecurityPpsRateLimit       = Service{"radware.Security.PpsRateLimit", "SecurityPpsRateLimitAction"}
+	SecurityConnectionLimit    = Service{"radware.Security.ConnectionLimit", "SecurityConnectionLimitAction"}
 )
 
 var registry = map[string]Service{}
@@ -58,7 +66,9 @@ func init() {
 		SecurityOperation, SecurityVersion, SecurityAttackDB, SecurityPolicy, SecurityPolicyUtil,
 		SecurityReporting, SecuritySuspendTable, SecurityBehavioralDoS, SecuritySynProtection,
 		SecurityDnsProtection, SecurityHTTPSFlood, SecurityAntiScanning, SecuritySignatures,
-		SecurityStatefulInspection, SecurityErtFeedStatus,
+		SecurityStatefulInspection, SecurityErtFeedStatus, SecurityErtFeedProtection,
+		SecurityBdosExcludedStats, SecurityOutOfState, SecurityTrafficFilter, SecurityGeoProfiles,
+		SecurityQdosProfiles, SecurityPpsRateLimit, SecurityConnectionLimit,
 	} {
 		registry[strings.ToLower(s.Name())] = s
 	}

@@ -120,6 +120,9 @@ func main() {
 	v1.HandleFunc("/attacks", apiHandler.Attacks).Methods(http.MethodGet)
 	v1.HandleFunc("/suspended", apiHandler.Suspended).Methods(http.MethodGet)
 	v1.HandleFunc("/protections", apiHandler.Protections).Methods(http.MethodGet)
+	v1.HandleFunc("/profiles", apiHandler.Profiles).Methods(http.MethodGet)
+	v1.HandleFunc("/behavioral", apiHandler.Behavioral).Methods(http.MethodGet)
+	v1.HandleFunc("/analytics", apiHandler.Analytics).Methods(http.MethodGet)
 
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{

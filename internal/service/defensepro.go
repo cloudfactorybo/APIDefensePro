@@ -102,6 +102,11 @@ func (s *DefenseProService) call(ctx context.Context, ttl time.Duration, svc soa
 func fetchTable[T any](ctx context.Context, s *DefenseProService, ttl time.Duration, svc soap.Service, op string) ([]T, error) {
 	resp, err := s.call(ctx, ttl, svc, op)
 	if err != nil {
+		// Con la tabla vacía el equipo a veces responde un Fault
+		// NoSuchInstanceException en vez de una tabla sin filas.
+		if isNoSuchInstance(err) {
+			return []T{}, nil
+		}
 		return nil, err
 	}
 	rows, err := resp.Table()
@@ -191,6 +196,11 @@ func (s *DefenseProService) gather(ctx context.Context, tasks ...task) error {
 func isFault(err error) bool {
 	var f *soap.Fault
 	return errors.As(err, &f)
+}
+
+func isNoSuchInstance(err error) bool {
+	var f *soap.Fault
+	return errors.As(err, &f) && strings.Contains(f.String, "NoSuchInstance")
 }
 
 func (s *DefenseProService) Ping(ctx context.Context) error {

@@ -57,6 +57,48 @@ func TestDecodeISO88591(t *testing.T) {
 	}
 }
 
+// Respuesta real de un DefensePro 8.34 (recortada a una fila): xsi de 1999,
+// wrapper "_response", <item> y valores en CDATA con espacio final.
+func TestDecodeRealDeviceLog(t *testing.T) {
+	body := `<?xml version="1.0" encoding="ISO-8859-1"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/1999/XMLSchema-instance" xmlns:xsd="http://www.w3.org/1999/XMLSchema" ><SOAP-ENV:Body><tns:getAll_Log_response xmlns:tns="radware.Security.Reporting" SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><table xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" xsi:type="SOAP-ENC:Array" SOAP-ENC:arrayType="tns:Log[]"><item><AttackIndex>1</AttackIndex><AttackName>SYN Flood HTTPS</AttackName><AttackSourceAddress>0.0.0.0</AttackSourceAddress><AttackDestinationAddress>143.0.101.21</AttackDestinationAddress><MessageType>terminated</MessageType><AttackTime><![CDATA[07-06-2024 12:53:52 ]]></AttackTime><Context>regular</Context><SrcPort>0</SrcPort><DstPort>443</DstPort><Protocol>TCP</Protocol><PhysicalPort>0</PhysicalPort><RadwareID>200001</RadwareID><Category>syn-flood</Category><PolicyName>Pol_Correo</PolicyName><PacketCount>0</PacketCount><ByteCount>0</ByteCount><Action>proxy</Action><Risk>medium</Risk><VlanTag>0</VlanTag><MPLSTag>0</MPLSTag><MPLSRD><![CDATA[N/A]]></MPLSRD></item></table><status>true</status></tns:getAll_Log_response></SOAP-ENV:Body></SOAP-ENV:Envelope>`
+	resp, err := Decode([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := resp.Table()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %v, err = %v", rows, err)
+	}
+	r := rows[0]
+	if r["AttackTime"] != "07-06-2024 12:53:52" || r["AttackName"] != "SYN Flood HTTPS" || r["DstPort"] != "443" || r["MPLSRD"] != "N/A" {
+		t.Errorf("row = %v", r)
+	}
+}
+
+// Fault real que el equipo devuelve para una tabla sin filas.
+func TestDecodeRealNoSuchInstance(t *testing.T) {
+	body := `<?xml version="1.0" encoding="ISO-8859-1"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/1999/XMLSchema-instance" xmlns:xsd="http://www.w3.org/1999/XMLSchema" ><SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>SOAP-ENV:Client</faultcode><faultstring>NoSuchInstanceException: while processing getAll_rsIDSTrafficAnalysisProtectionEntry request - the entry does not exist. </faultstring><detail><exception>NoSuchInstanceException</exception><errorMessage>the entry does not exist</errorMessage></detail></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>`
+	_, err := Decode([]byte(body))
+	var f *Fault
+	if !errors.As(err, &f) || !strings.HasPrefix(f.String, "NoSuchInstanceException") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDecodeRowsNested(t *testing.T) {
+	type inner struct {
+		In int64 `soap:"TcpInQuota"`
+	}
+	type outer struct {
+		Name   string `soap:"ProfileName"`
+		Quotas inner
+	}
+	out := DecodeRows[outer]([]Row{{"ProfileName": "BDOS_APP", "TcpInQuota": "75"}})
+	if out[0].Name != "BDOS_APP" || out[0].Quotas.In != 75 {
+		t.Errorf("DecodeRows anidado = %+v", out[0])
+	}
+}
+
 func TestDecodeValueNil(t *testing.T) {
 	body := envOpen + `<r><value xsi:nil="true">x</value></r>` + envClose
 	resp, err := Decode([]byte(body))

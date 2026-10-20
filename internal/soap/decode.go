@@ -244,30 +244,40 @@ func parseFault(body []byte) *Fault {
 }
 
 // DecodeRows convierte filas en structs según el tag `soap:"Campo"` de cada
-// campo. Soporta string, enteros, float y bool. Es tolerante: un valor que no
-// parsea (p.ej. "N/A" en un campo numérico) deja el cero del tipo.
+// campo; los structs anidados sin tag se recorren (p.ej. agrupar cuotas). Soporta
+// string, enteros, float y bool. Es tolerante: un valor que no parsea (p.ej.
+// "N/A" en un campo numérico) deja el cero del tipo.
 func DecodeRows[T any](rows []Row) []T {
 	out := make([]T, len(rows))
 	if len(rows) == 0 {
 		return out
 	}
-	t := reflect.TypeFor[T]()
-	type mapped struct {
-		index int
-		name  string
-	}
-	var fields []mapped
-	for i := 0; i < t.NumField(); i++ {
-		if tag := t.Field(i).Tag.Get("soap"); tag != "" {
-			fields = append(fields, mapped{i, tag})
-		}
-	}
+	fields := soapFields(reflect.TypeFor[T](), nil)
 	for i, row := range rows {
 		v := reflect.ValueOf(&out[i]).Elem()
 		for _, f := range fields {
 			if raw, ok := row[f.name]; ok {
-				setField(v.Field(f.index), raw)
+				setField(v.FieldByIndex(f.index), raw)
 			}
+		}
+	}
+	return out
+}
+
+type soapField struct {
+	index []int
+	name  string
+}
+
+func soapFields(t reflect.Type, prefix []int) []soapField {
+	var out []soapField
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		index := append(append([]int(nil), prefix...), i)
+		if tag := f.Tag.Get("soap"); tag != "" {
+			out = append(out, soapField{index, tag})
+		} else if f.Type.Kind() == reflect.Struct && f.IsExported() {
+			out = append(out, soapFields(f.Type, index)...)
 		}
 	}
 	return out

@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,8 +14,11 @@ import (
 )
 
 const (
-	defaultAttackLimit = 500
-	maxAttackLimit     = 10000
+	defaultAttackLimit     = 500
+	defaultBehavioralLimit = 50
+	maxAttackLimit         = 10000
+	defaultTop             = 10
+	maxTop                 = 100
 )
 
 // APIHandler expone los endpoints /api/v1. Todos aceptan ?device=a,b para
@@ -86,12 +90,74 @@ func (h *APIHandler) Attacks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	filter, err := parseAttackFilter(r)
+	filter, err := parseAttackFilter(r, defaultAttackLimit)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	results, errs := h.service.GetAllAttacks(r.Context(), devices, filter)
+	writeAggregated(w, results, errs, len(results) == 0)
+}
+
+// Profiles devuelve los perfiles de protección por módulo. ?type= (CSV) limita
+// los módulos consultados; ver service.ProfileTypes.
+func (h *APIHandler) Profiles(w http.ResponseWriter, r *http.Request) {
+	devices, ok := h.devices(w, r)
+	if !ok {
+		return
+	}
+	types := parseCSVParam(r, "type")
+	for i, t := range types {
+		types[i] = strings.ToLower(t)
+		if !slices.Contains(service.ProfileTypes, types[i]) {
+			writeError(w, http.StatusBadRequest, "type inválido: "+t+" (válidos: "+strings.Join(service.ProfileTypes, ", ")+")")
+			return
+		}
+	}
+	results, errs := h.service.GetAllProfiles(r.Context(), devices, types)
+	writeAggregated(w, results, errs, len(results) == 0)
+}
+
+// Behavioral devuelve BDoS y DNS protection: estado, perfiles, tráfico de
+// puertos excluidos y ataques behavioral (mismos filtros que /attacks, limit
+// default 50). ?bypass=true agrega la tabla de bypass de BDoS.
+func (h *APIHandler) Behavioral(w http.ResponseWriter, r *http.Request) {
+	devices, ok := h.devices(w, r)
+	if !ok {
+		return
+	}
+	filter, err := parseAttackFilter(r, defaultBehavioralLimit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	withBypass := strings.EqualFold(r.URL.Query().Get("bypass"), "true")
+	results, errs := h.service.GetAllBehavioral(r.Context(), devices, withBypass, filter)
+	writeAggregated(w, results, errs, len(results) == 0)
+}
+
+// Analytics devuelve tráfico, utilización por política y agregados del log.
+// Acepta los filtros de /attacks (limit no aplica) y ?top= (default 10).
+func (h *APIHandler) Analytics(w http.ResponseWriter, r *http.Request) {
+	devices, ok := h.devices(w, r)
+	if !ok {
+		return
+	}
+	filter, err := parseAttackFilter(r, 0)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	top := defaultTop
+	if v := r.URL.Query().Get("top"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxTop {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("top inválido: debe ser un entero entre 1 y %d", maxTop))
+			return
+		}
+		top = n
+	}
+	results, errs := h.service.GetAllAnalytics(r.Context(), devices, filter, top)
 	writeAggregated(w, results, errs, len(results) == 0)
 }
 
@@ -119,14 +185,14 @@ func (h *APIHandler) devices(w http.ResponseWriter, r *http.Request) ([]string, 
 	return names, true
 }
 
-func parseAttackFilter(r *http.Request) (models.AttackFilter, error) {
+func parseAttackFilter(r *http.Request, defaultLimit int) (models.AttackFilter, error) {
 	f := models.AttackFilter{
 		Risks:      parseCSVParam(r, "risk"),
 		Categories: parseCSVParam(r, "category"),
 		Actions:    parseCSVParam(r, "action"),
 		Types:      parseCSVParam(r, "type"),
 		Policies:   parseCSVParam(r, "policy"),
-		Limit:      defaultAttackLimit,
+		Limit:      defaultLimit,
 	}
 	if v := r.URL.Query().Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)

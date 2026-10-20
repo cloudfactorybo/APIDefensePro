@@ -244,6 +244,24 @@ func (m *MultiDefenseProService) GetAllSuspended(ctx context.Context, names []st
 	return fanOut(ctx, m, names, "suspended", (*DefenseProService).GetSuspended)
 }
 
+func (m *MultiDefenseProService) GetAllProfiles(ctx context.Context, names, types []string) ([]models.Profiles, []DeviceError) {
+	return fanOut(ctx, m, names, "profiles", func(s *DefenseProService, ctx context.Context) (*models.Profiles, error) {
+		return s.GetProfiles(ctx, types)
+	})
+}
+
+func (m *MultiDefenseProService) GetAllBehavioral(ctx context.Context, names []string, withBypass bool, f models.AttackFilter) ([]models.Behavioral, []DeviceError) {
+	return fanOut(ctx, m, names, "behavioral", func(s *DefenseProService, ctx context.Context) (*models.Behavioral, error) {
+		return s.GetBehavioral(ctx, withBypass, f)
+	})
+}
+
+func (m *MultiDefenseProService) GetAllAnalytics(ctx context.Context, names []string, f models.AttackFilter, top int) ([]models.Analytics, []DeviceError) {
+	return fanOut(ctx, m, names, "analytics", func(s *DefenseProService, ctx context.Context) (*models.Analytics, error) {
+		return s.GetAnalytics(ctx, f, top)
+	})
+}
+
 func (m *MultiDefenseProService) GetAllProtections(ctx context.Context, names []string) ([]models.Protections, []DeviceError) {
 	return fanOut(ctx, m, names, "protections", (*DefenseProService).GetProtections)
 }

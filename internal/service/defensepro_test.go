@@ -39,6 +39,11 @@ func (f *fakeDP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/xml")
 	parts, ok := f.parts[svc+"#"+op]
+	if strings.HasPrefix(parts, "FAULT:") {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>SOAP-ENV:Client</faultcode><faultstring>%s</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>`, strings.TrimPrefix(parts, "FAULT:"))
+		return
+	}
 	if !ok {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>SOAP-ENV:Client</faultcode><faultstring>unsupported %s</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>`, op)
