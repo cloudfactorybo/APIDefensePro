@@ -22,6 +22,8 @@ func TestAllowlist(t *testing.T) {
 		"1.3.6.1.4.1.89.35.1.53.0",
 		"1.3.6.1.4.1.89.2.12.0",
 		"1.3.6.1.2.1.1.5.0",
+		"1.3.6.1.2.1.31.1.1.1.1.9", // ifName
+		"1.3.6.1.2.1.2.2.1.8.7",    // ifOperStatus
 	}
 	for _, o := range ok {
 		if !Allowed(o) {
@@ -36,6 +38,8 @@ func TestAllowlist(t *testing.T) {
 		"1.3.6.1.4.1.89.35.1.65.101",  // rsNetFlood* (incluye reset de baseline)
 		"1.3.6.1.4.1.89.35.1.65.1880", // prefijo engañoso de .188
 		"1.3.6.1.4.1.89.35.1.5",       // prefijo engañoso de .53
+		"1.3.6.1.2.1.2.2.1.6",         // ifPhysAddress: no es una columna permitida
+		"1.3.6.1.2.1.2.2",             // ifTable completa
 	}
 	for _, o := range blocked {
 		if Allowed(o) {

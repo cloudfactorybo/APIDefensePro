@@ -42,7 +42,27 @@ const (
 	oidAccelerator   = "1.3.6.1.4.1.89.35.1.88.3"
 	oidSyslogServers = "1.3.6.1.4.1.89.35.1.173"
 	oidResourceUtil  = "1.3.6.1.4.1.89.35.1.53.0"
+	oidIfDescr       = "1.3.6.1.2.1.2.2.1.2"
+	oidIfOperStatus  = "1.3.6.1.2.1.2.2.1.8"
+	oidIfName        = "1.3.6.1.2.1.31.1.1.1.1"
+	oidIfHighSpeed   = "1.3.6.1.2.1.31.1.1.1.15"
 )
+
+var ifOperStatus = map[int]string{1: "up", 2: "down", 3: "testing", 4: "unknown", 5: "dormant", 6: "notPresent", 7: "lowerLayerDown"}
+
+// ifColumn indexa una columna del IF-MIB por ifIndex.
+func ifColumn(pdus []snmp.PDU, col string) map[int]snmp.PDU {
+	out := map[int]snmp.PDU{}
+	prefix := col + "."
+	for _, p := range pdus {
+		if strings.HasPrefix(p.OID, prefix) {
+			if n, ok := snmp.IntIndex(p.OID[len(prefix):]); ok {
+				out[n] = p
+			}
+		}
+	}
+	return out
+}
 
 // Tabla N de rsTrafficUtilizationPer{Port,Policy} → protocolo.
 var trafficProtocols = []struct {
@@ -196,12 +216,16 @@ func (s *DefenseProService) GetTrafficPolicies(ctx context.Context, names []stri
 // GetTrafficPorts devuelve el tráfico por puerto físico.
 func (s *DefenseProService) GetTrafficPorts(ctx context.Context, includeIdle bool) (*models.TrafficPorts, error) {
 	out := &models.TrafficPorts{Ports: []models.PortTrafficStats{}}
-	var util, stats []snmp.PDU
+	var util, stats, ifDescr, ifOper, ifName, ifSpeed []snmp.PDU
 	var total map[string]snmp.PDU
 	err := s.gather(ctx, out,
 		s.walkTask(oidTrafficPort, statsTTL, &util),
 		s.walkTask(oidPortStats, statsTTL, &stats),
 		s.getTask([]string{oidPortTotalIn}, statsTTL, &total),
+		s.walkTask(oidIfName, configTTL, &ifName),
+		s.walkTask(oidIfDescr, configTTL, &ifDescr),
+		s.walkTask(oidIfOperStatus, statsTTL, &ifOper),
+		s.walkTask(oidIfHighSpeed, statsTTL, &ifSpeed),
 	)
 	if err != nil {
 		return nil, err
@@ -241,6 +265,18 @@ func (s *DefenseProService) GetTrafficPorts(ctx context.Context, includeIdle boo
 				ExcludedPps: r[6].Uint64(), ExcludedBytesPerSec: r[7].Uint64(),
 			}
 		}
+	}
+
+	names, descrs := ifColumn(ifName, oidIfName), ifColumn(ifDescr, oidIfDescr)
+	opers, speeds := ifColumn(ifOper, oidIfOperStatus), ifColumn(ifSpeed, oidIfHighSpeed)
+	for n, p := range ports {
+		p.Name = names[n].String()
+		p.Description = descrs[n].String()
+		p.Management = strings.HasPrefix(strings.ToUpper(p.Name), "MNG")
+		if o, ok := opers[n]; ok {
+			p.OperStatus = enumName(ifOperStatus, int(o.Int64()))
+		}
+		p.LinkSpeedMbps = speeds[n].Int64()
 	}
 
 	for _, p := range ports {

@@ -19,6 +19,12 @@ const (
 var allowed = []string{
 	"1.3.6.1.2.1.1", // SNMPv2-MIB system: sysDescr, sysUpTime, sysName
 
+	// IF-MIB: sólo nombre, descripción, estado y velocidad de cada puerto.
+	"1.3.6.1.2.1.2.2.1.2",     // ifDescr
+	"1.3.6.1.2.1.2.2.1.8",     // ifOperStatus
+	"1.3.6.1.2.1.31.1.1.1.1",  // ifName
+	"1.3.6.1.2.1.31.1.1.1.15", // ifHighSpeed
+
 	// Identidad (rnd): versión, serie, tipo, puertos, throughput, cores.
 	radware + ".2.4", radware + ".2.12", radware + ".2.13", radware + ".2.14",
 	radware + ".2.16", radware + ".2.17", radware + ".2.22", radware + ".2.24",

@@ -37,6 +37,12 @@ type TrafficPorts struct {
 
 type PortTrafficStats struct {
 	Port int `json:"port"`
+	// IF-MIB (índice = número de puerto).
+	Name          string `json:"name"`        // ifName: "7", "MNG-1"
+	Description   string `json:"description"` // ifDescr: "Gigabit Ethernet-7", "TenGE-1"
+	Management    bool   `json:"management"`  // puerto de gestión (MNG-x)
+	OperStatus    string `json:"operStatus"`  // up, down, ...
+	LinkSpeedMbps int64  `json:"linkSpeedMbps"`
 	// rsPortsStatsTable (último segundo).
 	InPps             int64 `json:"inPps"`
 	InDiscardsPerSec  int64 `json:"inDiscardsPerSec"`

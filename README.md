@@ -136,7 +136,7 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 | `GET` | `/health` | Estado del proceso (sin auth) | — |
 | `GET` | `/health/deep` | Ping SOAP a cada equipo (sin auth) | — |
 | `GET` | `/api/v1/traffic/policies` | **SNMP** · Tráfico en tiempo real por política y protocolo (TCP, UDP, ICMP, OTHER, SCTP, IGMP): conexiones nuevas, pps y bytes/s recibidos y descartados, más totales. `?policy=`, `?include_idle=true` | 10 s |
-| `GET` | `/api/v1/traffic/ports` | **SNMP** · Por puerto físico: pps, Mbps, descartes y errores de entrada/salida, y por protocolo recibido, descartado y excluido. `?include_idle=true` | 10 s |
+| `GET` | `/api/v1/traffic/ports` | **SNMP** · Por puerto físico, con su nombre (`TenGE-1`, `Gigabit Ethernet-7`, `MNG-1`), estado y velocidad del enlace: pps, Mbps, descartes y errores de entrada/salida, y por protocolo recibido, descartado y excluido. `?include_idle=true` | 10 s |
 | `GET` | `/api/v1/sessions` | **SNMP** · Conexiones concurrentes TCP/UDP, entradas de la session table y uso por engine | 10 s |
 | `GET` | `/api/v1/syn-triggers` | **SNMP** · Triggers activos de SYN protection: IP y puerto atacados, SYN y requests por segundo, descartadas | 10 s |
 | `GET` | `/api/v1/health` | **SNMP** · Salud: CPU (controlador y engines), acelerador, RAM, disco, temperaturas, fuentes, HA, reloj del equipo y su desfase, tablas internas, feed ERT y estado de cada servidor syslog (alcanzable, logs pendientes) | 10 s |
@@ -447,7 +447,7 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | Endpoint | Objetos |
 |---|---|
 | `traffic/policies` | `rsTrafficUtilizationPerPolicyTable{UDP,TCP,ICMP,OTHER,SCTP,IGMP}` (`.1.3.6.1.4.1.89.35.1.65.188.4`) |
-| `traffic/ports` | `rsTrafficUtilizationPerPortTable*` (`…65.188.3`), `rsPortsStatsTable` (`…122.59`), `rsPortStatsTotalInMbitsPerSec` |
+| `traffic/ports` | `rsTrafficUtilizationPerPortTable*` (`…65.188.3`), `rsPortsStatsTable` (`…122.59`), `rsPortStatsTotalInMbitsPerSec`, IF-MIB `ifName`, `ifDescr`, `ifOperStatus`, `ifHighSpeed` |
 | `sessions` | `rsTrafficUtilizationConcurrentConnectionsTCP/UDP`, `rsSESSIONTotalUsed`, `rsSESSIONUsedEntriesTable` |
 | `syn-triggers` | `rsSESSIONSynActivationTable` (`…104.42`) |
 | `health` | `rsWSD(RS)ResourceUtilization`, `rdwr5/60SecAvgResourceUtilization`, `rsSysUtil*`, `rdwrTemperature*`, `rsHWCPUTemperatureTable`, `rsACCResourceTable`, `rdwrPowerSupply*`, `rdwrDPHighAvailability*`, `rsWSDSysUpTime/ManagedTime/ManagedDate`, `rsIDSSuspendTable*`, `rs{Tcp,Http,Dns}AuthenListUtilization`, `rsIDSHwPolicies*`, `rsErtAttackersFeedStatus`, `rdwrSyslogServerTable` |

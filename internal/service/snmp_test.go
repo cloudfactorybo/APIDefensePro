@@ -126,6 +126,11 @@ func TestGetTrafficPorts(t *testing.T) {
 		},
 		gets: map[string]snmp.PDU{oidPortTotalIn: i(oidPortTotalIn, 30)},
 	}
+	// IF-MIB real del DefensePro 6: ifName "8"/"MNG-1", ifDescr "Gigabit Ethernet-8".
+	f.walks[oidIfName] = []snmp.PDU{s(oidIfName+".8", "8"), s(oidIfName+".9", "MNG-1")}
+	f.walks[oidIfDescr] = []snmp.PDU{s(oidIfDescr+".8", "Gigabit Ethernet-8"), s(oidIfDescr+".9", "Gigabit Ethernet-9")}
+	f.walks[oidIfOperStatus] = []snmp.PDU{i(oidIfOperStatus+".8", 1)}
+	f.walks[oidIfHighSpeed] = []snmp.PDU{u(oidIfHighSpeed+".8", 1000)}
 	out, err := newSNMPService(f, Limits{MaxConcurrency: 1}).GetTrafficPorts(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +141,9 @@ func TestGetTrafficPorts(t *testing.T) {
 	p := out.Ports[0]
 	if p.Port != 8 || p.InPps != 2772 || p.OutPps != 1279 || p.InMbps != 28 || p.OutMbps != 1 {
 		t.Errorf("port stats = %+v", p)
+	}
+	if p.Name != "8" || p.Description != "Gigabit Ethernet-8" || p.OperStatus != "up" || p.LinkSpeedMbps != 1000 || p.Management {
+		t.Errorf("IF-MIB = %+v", p)
 	}
 	if tcp := p.Protocols["tcp"]; tcp.ReceivedPps != 3608 || tcp.ReceivedBytesPerSec != 4719187 || tcp.ExcludedPps != 3 {
 		t.Errorf("tcp = %+v", tcp)
