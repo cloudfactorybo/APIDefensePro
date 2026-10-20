@@ -40,6 +40,7 @@ type DeviceConfig struct {
 	// MinCallGap fija una pausa entre ellas: la CPU de gestión es modesta.
 	MaxConcurrency int
 	MinCallGap     time.Duration
+	BusyCPUPercent int // sobre este % de CPU del equipo se omiten consultas pesadas
 }
 
 func Load() *Config {
@@ -63,6 +64,7 @@ func Load() *Config {
 		Device: DeviceConfig{
 			MaxConcurrency: parseInt(os.Getenv("DEVICE_MAX_CONCURRENCY"), 1),
 			MinCallGap:     parseDuration(os.Getenv("DEVICE_MIN_CALL_GAP"), 100*time.Millisecond),
+			BusyCPUPercent: parseInt(os.Getenv("DEVICE_BUSY_CPU_PCT"), 85),
 		},
 	}
 }

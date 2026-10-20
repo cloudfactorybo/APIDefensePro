@@ -16,6 +16,17 @@ type Device struct {
 	InsecureSkipVerify bool
 	CACert             string
 	Enabled            bool
+	SNMP               SNMP // SNMP.User vacío = sin SNMP
+}
+
+// SNMP son las credenciales SNMPv3 (USM) de un equipo.
+type SNMP struct {
+	User      string
+	Port      int
+	AuthProto string
+	AuthPass  string
+	PrivProto string
+	PrivPass  string
 }
 
 type DevicesRepo struct {
@@ -26,12 +37,14 @@ func NewDevicesRepo(s *Storage) *DevicesRepo {
 	return &DevicesRepo{db: s.db}
 }
 
-const deviceColumns = `id, name, base_url, username, password, insecure_skip_verify, COALESCE(ca_cert, ''), enabled`
+const deviceColumns = `id, name, base_url, username, password, insecure_skip_verify, COALESCE(ca_cert, ''), enabled,
+	snmp_user, snmp_port, snmp_auth_proto, snmp_auth_pass, snmp_priv_proto, snmp_priv_pass`
 
 func scanDevice(row interface{ Scan(...any) error }) (Device, error) {
 	var d Device
 	err := row.Scan(&d.ID, &d.Name, &d.BaseURL, &d.Username, &d.Password,
-		&d.InsecureSkipVerify, &d.CACert, &d.Enabled)
+		&d.InsecureSkipVerify, &d.CACert, &d.Enabled,
+		&d.SNMP.User, &d.SNMP.Port, &d.SNMP.AuthProto, &d.SNMP.AuthPass, &d.SNMP.PrivProto, &d.SNMP.PrivPass)
 	return d, err
 }
 
@@ -87,6 +100,26 @@ func (r *DevicesRepo) SetEnabled(ctx context.Context, name string, enabled bool)
 	res, err := r.db.ExecContext(ctx, `
         UPDATE devices SET enabled = $1, updated_at = NOW() WHERE name = $2
     `, enabled, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("dispositivo %q no encontrado", name)
+	}
+	return nil
+}
+
+// SetSNMP guarda (o, con SNMP vacío, borra) las credenciales SNMPv3 de un equipo.
+func (r *DevicesRepo) SetSNMP(ctx context.Context, name string, s SNMP) error {
+	if s.Port == 0 {
+		s.Port = 161
+	}
+	res, err := r.db.ExecContext(ctx, `
+        UPDATE devices SET snmp_user = $1, snmp_port = $2, snmp_auth_proto = $3, snmp_auth_pass = $4,
+               snmp_priv_proto = $5, snmp_priv_pass = $6, updated_at = NOW()
+        WHERE name = $7
+    `, s.User, s.Port, s.AuthProto, s.AuthPass, s.PrivProto, s.PrivPass, name)
 	if err != nil {
 		return err
 	}

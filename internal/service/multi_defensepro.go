@@ -12,6 +12,7 @@ import (
 	"defensepro-api/internal/cache"
 	"defensepro-api/internal/models"
 	"defensepro-api/internal/reqctx"
+	"defensepro-api/internal/snmp"
 	"defensepro-api/internal/storage"
 	"defensepro-api/pkg/httpclient"
 )
@@ -76,12 +77,21 @@ func (m *MultiDefenseProService) Refresh(ctx context.Context) error {
 		if !d.Enabled {
 			continue
 		}
-		devices = append(devices, &Device{
-			Name:    d.Name,
-			URL:     d.BaseURL,
-			IP:      extractIPFromURL(d.BaseURL),
-			Service: NewDefenseProService(d.Name, d.BaseURL, d.Username, d.Password, m.httpClient, m.logger, m.cache, m.limits),
-		})
+		ip := extractIPFromURL(d.BaseURL)
+		svc := NewDefenseProService(d.Name, d.BaseURL, d.Username, d.Password, m.httpClient, m.logger, m.cache, m.limits)
+		if d.SNMP.User != "" {
+			client, err := snmp.NewClient(snmp.Config{
+				Host: ip, Port: uint16(d.SNMP.Port), User: d.SNMP.User,
+				AuthProtocol: d.SNMP.AuthProto, AuthPassword: d.SNMP.AuthPass,
+				PrivProtocol: d.SNMP.PrivProto, PrivPassword: d.SNMP.PrivPass,
+			})
+			if err != nil {
+				m.logger.WithField("device", d.Name).WithError(err).Error("configuración SNMP inválida")
+			} else {
+				svc.SetSNMP(client)
+			}
+		}
+		devices = append(devices, &Device{Name: d.Name, URL: d.BaseURL, IP: ip, Service: svc})
 	}
 
 	m.mu.Lock()
@@ -294,6 +304,34 @@ func (m *MultiDefenseProService) GetAllCapacity(ctx context.Context, names []str
 
 func (m *MultiDefenseProService) GetAllManagement(ctx context.Context, names []string) ([]models.Management, []DeviceError) {
 	return fanOut(ctx, m, names, "management", (*DefenseProService).GetManagement)
+}
+
+func (m *MultiDefenseProService) GetAllTrafficPolicies(ctx context.Context, names, policies []string, includeIdle bool) ([]models.TrafficPolicies, []DeviceError) {
+	return fanOut(ctx, m, names, "traffic-policies", func(s *DefenseProService, ctx context.Context) (*models.TrafficPolicies, error) {
+		return s.GetTrafficPolicies(ctx, policies, includeIdle)
+	})
+}
+
+func (m *MultiDefenseProService) GetAllTrafficPorts(ctx context.Context, names []string, includeIdle bool) ([]models.TrafficPorts, []DeviceError) {
+	return fanOut(ctx, m, names, "traffic-ports", func(s *DefenseProService, ctx context.Context) (*models.TrafficPorts, error) {
+		return s.GetTrafficPorts(ctx, includeIdle)
+	})
+}
+
+func (m *MultiDefenseProService) GetAllSessions(ctx context.Context, names []string) ([]models.Sessions, []DeviceError) {
+	return fanOut(ctx, m, names, "sessions", (*DefenseProService).GetSessions)
+}
+
+func (m *MultiDefenseProService) GetAllSynTriggers(ctx context.Context, names []string) ([]models.SynTriggers, []DeviceError) {
+	return fanOut(ctx, m, names, "syn-triggers", (*DefenseProService).GetSynTriggers)
+}
+
+func (m *MultiDefenseProService) GetAllDeviceHealth(ctx context.Context, names []string) ([]models.DeviceHealth, []DeviceError) {
+	return fanOut(ctx, m, names, "health", (*DefenseProService).GetDeviceHealth)
+}
+
+func (m *MultiDefenseProService) GetAllDeviceInfo(ctx context.Context, names []string) ([]models.DeviceInfo, []DeviceError) {
+	return fanOut(ctx, m, names, "info", (*DefenseProService).GetDeviceInfo)
 }
 
 func (m *MultiDefenseProService) GetAllProtections(ctx context.Context, names []string) ([]models.Protections, []DeviceError) {

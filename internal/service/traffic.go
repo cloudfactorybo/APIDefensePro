@@ -42,6 +42,9 @@ func (s *DefenseProService) cli(ctx context.Context, command string) (string, er
 // GetBehavioralTraffic devuelve baseline, tráfico actual y descartado de BDoS
 // (por protocolo) y DNS (por tipo de consulta) de una política.
 func (s *DefenseProService) GetBehavioralTraffic(ctx context.Context, policy string) (*models.BehavioralTraffic, error) {
+	if err := s.checkBusy(ctx); err != nil {
+		return nil, err
+	}
 	var policies []models.Policy
 	if err := s.gather(ctx, nil, table(s, soap.SecurityPolicy, "getAll_Policy", configTTL, &policies)); err != nil {
 		return nil, err

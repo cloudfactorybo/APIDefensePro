@@ -30,6 +30,9 @@ func addProfiles[T any](tasks *[]task, want map[string]bool, key string, s *Defe
 // GetProfiles devuelve los perfiles de protección. types filtra por módulo
 // (ver ProfileTypes); vacío = todos, que son 12 llamadas SOAP.
 func (s *DefenseProService) GetProfiles(ctx context.Context, types []string) (*models.Profiles, error) {
+	if err := s.checkBusy(ctx); err != nil {
+		return nil, err
+	}
 	want := toSet(types)
 	out := &models.Profiles{}
 	var tasks []task
@@ -57,6 +60,9 @@ func (s *DefenseProService) GetProfiles(ctx context.Context, types []string) (*m
 // ataques de esas categorías del log. f.Categories vacío = categorías
 // behavioral. Con f.Policies, todo se limita a esas políticas y sus perfiles.
 func (s *DefenseProService) GetBehavioral(ctx context.Context, withBypass bool, f models.AttackFilter) (*models.Behavioral, error) {
+	if err := s.checkBusy(ctx); err != nil {
+		return nil, err
+	}
 	out := &models.Behavioral{
 		Policies:             []models.BehavioralPolicy{},
 		BDoS:                 models.BehavioralBDoS{Profiles: []models.BDoSProfile{}},
@@ -100,6 +106,9 @@ func (s *DefenseProService) GetBehavioral(ctx context.Context, withBypass bool, 
 // GetAnalytics arma la vista de network analytics: tráfico actual, utilización
 // por política (de mayor a menor) y agregados del log de seguridad.
 func (s *DefenseProService) GetAnalytics(ctx context.Context, f models.AttackFilter, top int) (*models.Analytics, error) {
+	if err := s.checkBusy(ctx); err != nil {
+		return nil, err
+	}
 	out := &models.Analytics{PortTraffic: []models.PortTraffic{}, PolicyUtilization: []models.PolicyUtil{}}
 	var log []models.Attack
 	err := s.gather(ctx, out,

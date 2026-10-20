@@ -142,6 +142,9 @@ func setUsage(t *models.TableUsage, used int64) {
 // TACACS+, contraseñas de usuarios): el candado de soap.CheckReadOnly los
 // bloquea aunque se pidan.
 func (s *DefenseProService) GetManagement(ctx context.Context) (*models.Management, error) {
+	if err := s.checkBusy(ctx); err != nil {
+		return nil, err
+	}
 	out := &models.Management{Syslog: models.SyslogStatus{Servers: []models.SyslogServer{}}}
 	a, ntp := &out.Access, &out.NTP
 	err := s.gather(ctx, out,

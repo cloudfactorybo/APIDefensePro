@@ -24,9 +24,10 @@ func NewFormatter(kind string) logrus.Formatter {
 type textFormatter struct{}
 
 // Ejemplo de salida:
-//   18:48:07  INFO   GET  /api/v1/monitoring         200  14ms    req=f25eeafb client=172.18.0.1 bytes=591
-//   18:48:29  INFO   warmup system                                            ok=2 errors=0 duration=3.02s
-//   18:50:05  ERROR  defensepro call failed                                   device=DP1 endpoint=system err="auth 401"
+//
+//	18:48:07  INFO   GET  /api/v1/monitoring         200  14ms    req=f25eeafb client=172.18.0.1 bytes=591
+//	18:48:29  INFO   warmup system                                            ok=2 errors=0 duration=3.02s
+//	18:50:05  ERROR  defensepro call failed                                   device=DP1 endpoint=system err="auth 401"
 func (f *textFormatter) Format(e *logrus.Entry) ([]byte, error) {
 	var b bytes.Buffer
 

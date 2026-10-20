@@ -33,6 +33,8 @@ type DefenseProService struct {
 	logger *logrus.Logger
 	cache  *cache.Cache
 	gate   *gate
+	busy   int        // % de CPU a partir del cual se omiten consultas pesadas (0 = sin freno)
+	snmp   snmpReader // nil = equipo sin SNMP configurado
 }
 
 func NewDefenseProService(name, baseURL, username, password string, client *http.Client, logger *logrus.Logger, c *cache.Cache, limits Limits) *DefenseProService {
@@ -42,6 +44,7 @@ func NewDefenseProService(name, baseURL, username, password string, client *http
 		logger: logger,
 		cache:  c,
 		gate:   newGate(limits),
+		busy:   limits.BusyCPUPercent,
 	}
 }
 
@@ -379,6 +382,9 @@ func (s *DefenseProService) GetPolicies(ctx context.Context, names []string) (*m
 }
 
 func (s *DefenseProService) GetAttacks(ctx context.Context, f models.AttackFilter) (*models.Attacks, error) {
+	if err := s.checkBusy(ctx); err != nil {
+		return nil, err
+	}
 	var entries []models.Attack
 	if err := s.gather(ctx, nil, table(s, soap.SecurityReporting, "getAll_Log", attacksTTL, &entries)); err != nil {
 		return nil, err

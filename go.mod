@@ -4,6 +4,7 @@ go 1.25.3
 
 require (
 	github.com/gorilla/mux v1.8.1
+	github.com/gosnmp/gosnmp v1.45.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/sirupsen/logrus v1.9.3

@@ -227,6 +227,55 @@ func (h *APIHandler) Management(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// TrafficPolicies (SNMP): ?policy= filtra; ?include_idle=true incluye las
+// políticas sin tráfico.
+func (h *APIHandler) TrafficPolicies(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllTrafficPolicies(r.Context(), devices, parseCSVParam(r, "policy"), includeIdle(r))
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+// TrafficPorts (SNMP): ?include_idle=true incluye los puertos sin tráfico.
+func (h *APIHandler) TrafficPorts(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllTrafficPorts(r.Context(), devices, includeIdle(r))
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) Sessions(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllSessions(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) SynTriggers(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllSynTriggers(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) DeviceHealth(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllDeviceHealth(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func (h *APIHandler) DeviceInfo(w http.ResponseWriter, r *http.Request) {
+	if devices, ok := h.devices(w, r); ok {
+		results, errs := h.service.GetAllDeviceInfo(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0)
+	}
+}
+
+func includeIdle(r *http.Request) bool {
+	return strings.EqualFold(r.URL.Query().Get("include_idle"), "true")
+}
+
 // devices lee ?device= y responde 404 si algún nombre no es un equipo activo.
 func (h *APIHandler) devices(w http.ResponseWriter, r *http.Request) ([]string, bool) {
 	names := parseCSVParam(r, "device")

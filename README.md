@@ -4,7 +4,7 @@
 
 **API REST para monitorear equipos Radware DefensePro desde un único punto.**
 
-Consulta varios DefensePro en paralelo a través de su API SOAP y entrega JSON limpio: ataques en curso, políticas, protecciones, utilización y hardware.
+Consulta varios DefensePro en paralelo a través de su API SOAP y SNMPv3, y entrega JSON limpio: tráfico en tiempo real por política y protocolo, ataques, políticas, protecciones, salud y auditoría.
 
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
@@ -32,7 +32,8 @@ Consulta varios DefensePro en paralelo a través de su API SOAP y entrega JSON l
 - **Inventario**: versiones, licencias, políticas con sus perfiles, interfaces, rutas y estado de cada módulo de protección.
 - **Cuidado con el equipo**: cache en Redis por tipo de dato, límite configurable de llamadas SOAP simultáneas y detección temprana de equipos caídos para no acumular timeouts.
 - **Tolerante a diferencias entre modelos**: si un equipo no soporta una función (p. ej. ventiladores en un DefensePro virtual), ese dato queda vacío y el resto se entrega igual.
-- **Segura por defecto**: sólo lectura, autenticación Bearer con tokens hasheados, HTTPS vía Traefik y puerto expuesto sólo en loopback.
+- **Tráfico en tiempo real por SNMPv3**: recibido y descartado por política y protocolo (las 33 políticas en una consulta), por puerto, conexiones y sesiones por engine, triggers de SYN protection y salud del equipo.
+- **Segura por defecto**: **sólo lectura garantizada** (candados en los clientes SOAP y SNMP), nunca lee secretos, autenticación Bearer con tokens hasheados, HTTPS vía Traefik y puerto expuesto sólo en loopback.
 - **Diagnóstico integrado**: CLI de administración para probar la conexión SOAP y ver el XML crudo de cualquier operación.
 
 ---
@@ -45,12 +46,17 @@ flowchart LR
     T --> A[defensepro-api<br/>Go]
     A <-->|cache por TTL| R[(Redis)]
     A <-->|equipos y tokens| P[(PostgreSQL)]
-    A -->|SOAP 1.1 · POST /soap| D1[DefensePro 1]
-    A -->|SOAP 1.1 · POST /soap| D2[DefensePro 2]
-    A -->|SOAP 1.1 · POST /soap| DN[DefensePro N]
+    A -->|SOAP 1.1 + SNMPv3| D1[DefensePro 1]
+    A -->|SOAP 1.1 + SNMPv3| D2[DefensePro 2]
+    A -->|SOAP 1.1 + SNMPv3| DN[DefensePro N]
 ```
 
-El DefensePro expone su API como **SOAP 1.1 RPC/encoded** en `https://<equipo>/soap`, con Basic Auth. La API traduce cada endpoint REST en un conjunto de operaciones SOAP (`get_*` / `getAll_*`) que se ejecutan en paralelo, se cachean en Redis y se devuelven como JSON.
+La API usa dos fuentes del equipo:
+
+- **SOAP 1.1 RPC/encoded** (`https://<equipo>/soap`, Basic Auth): configuración, políticas, perfiles, log de ataques, auditoría.
+- **SNMPv3** (UDP 161): tráfico en tiempo real, sesiones, salud. Es más liviano y no tiene el límite de salida del CLI.
+
+Cada equipo tiene una cola propia: por defecto una llamada a la vez con 100 ms entre llamadas, compartida por SOAP y SNMP. Las respuestas se cachean en Redis.
 
 | Componente | Rol |
 |---|---|
@@ -66,7 +72,7 @@ El DefensePro expone su API como **SOAP 1.1 RPC/encoded** en `https://<equipo>/s
 | Dónde | Qué |
 |---|---|
 | Host | Docker 20.10+ con Docker Compose, `openssl` y, opcionalmente, `curl` + `jq` |
-| DefensePro | API SOAP y HTTPS habilitados, y un usuario de gestión (idealmente de sólo lectura) |
+| DefensePro | API SOAP y HTTPS habilitados, un usuario de gestión de sólo lectura y, para los endpoints de tiempo real, un usuario SNMPv3 (idealmente SHA/AES) |
 
 Para habilitar la API SOAP, una sola vez desde el CLI de cada equipo:
 
@@ -92,10 +98,14 @@ alias admin='docker compose exec app defensepro-admin'
 admin add-device DP-CORE-1 https://10.10.0.21 apiuser 'Password1.'
 admin test-device DP-CORE-1
 
-# 4. Emitir un token (se muestra una sola vez)
+# 4. (Opcional, recomendado) SNMPv3 para el tráfico en tiempo real
+admin set-snmp DP-CORE-1 snmp-ro SHA 'ClaveAuth' AES 'ClavePriv'
+admin test-snmp DP-CORE-1
+
+# 5. Emitir un token (se muestra una sola vez)
 admin create-token mi-cliente
 
-# 5. Aplicar los cambios y consultar
+# 6. Aplicar los cambios y consultar
 docker compose restart app
 curl -k -H "Authorization: Bearer <token>" https://127.0.0.1:5687/api/v1/system | jq
 ```
@@ -125,8 +135,14 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 |---|---|---|---|
 | `GET` | `/health` | Estado del proceso (sin auth) | — |
 | `GET` | `/health/deep` | Ping SOAP a cada equipo (sin auth) | — |
+| `GET` | `/api/v1/traffic/policies` | **SNMP** · Tráfico en tiempo real por política y protocolo (TCP, UDP, ICMP, OTHER, SCTP, IGMP): conexiones nuevas, pps y bytes/s recibidos y descartados, más totales. `?policy=`, `?include_idle=true` | 10 s |
+| `GET` | `/api/v1/traffic/ports` | **SNMP** · Por puerto físico: pps, Mbps, descartes y errores de entrada/salida, y por protocolo recibido, descartado y excluido. `?include_idle=true` | 10 s |
+| `GET` | `/api/v1/sessions` | **SNMP** · Conexiones concurrentes TCP/UDP, entradas de la session table y uso por engine | 10 s |
+| `GET` | `/api/v1/syn-triggers` | **SNMP** · Triggers activos de SYN protection: IP y puerto atacados, SYN y requests por segundo, descartadas | 10 s |
+| `GET` | `/api/v1/health` | **SNMP** · Salud: CPU (controlador y engines), acelerador, RAM, disco, temperaturas, fuentes, HA, reloj del equipo y su desfase, tablas internas, feed ERT y estado de cada servidor syslog (alcanzable, logs pendientes) | 10 s |
+| `GET` | `/api/v1/info` | **SNMP** · Identidad: nombre, serie, versión, tipo, puertos, throughput y mitigación licenciados, cores, MAC | 10 min |
 | `GET` | `/api/v1/system` | Nombre, ubicación, uptime, plataforma, versiones de software, hardware, módulo de seguridad y base de firmas; MAC, RAM, modo de mitigación y operación, estado HA e imágenes instaladas | 10 min ¹ |
-| `GET` | `/api/v1/licenses` | License ID y key, licencia de throughput, capacidad de mitigación y estado del feed ERT | 10 min |
+| `GET` | `/api/v1/licenses` | License ID, licencia de throughput, capacidad de mitigación y estado del feed ERT (la clave de licencia no se publica) | 10 min |
 | `GET` | `/api/v1/monitoring` | CPU global y por engine, RAM, disco, tráfico del último segundo y pico, entradas de la session table | 10 s |
 | `GET` | `/api/v1/hardware` | Temperatura de CPUs, ventiladores y fuentes de poder | 10 s |
 | `GET` | `/api/v1/interfaces` | Interfaces L2 con estado y contadores, puertos físicos y tráfico por puerto | 10 s |
@@ -141,12 +157,11 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 | `GET` | `/api/v1/blocklists` | Listas de bloqueo (incluidas las dinámicas con su expiración) y de permitidos | 10 s – 1 min |
 | `GET` | `/api/v1/geo` | Reglas geo dinámicas y temporales por política, países asociados a cada perfil e IPs excluidas | 10 s – 1 min |
 | `GET` | `/api/v1/capacity` | Uso vs. capacidad de la session table, suspend table y tablas de autenticación TCP/HTTP; límites de políticas y tablas internas | 10 s – 10 min |
-| `GET` | `/api/v1/management` | Auditoría de gestión: HTTP/HTTPS/SSH/Telnet y sus puertos, cifrados débiles, método de autenticación, NTP, DNS, syslog y usuarios (sin contraseñas) | 1 min ² |
+| `GET` | `/api/v1/management` | Auditoría de gestión: HTTP/HTTPS/SSH/Telnet y sus puertos, cifrados débiles, método de autenticación, NTP, DNS y syslog | 1 min |
 | `GET` | `/api/v1/behavioral/traffic` | Métricas en tiempo real de una política (como BDoS/DNS Traffic Monitoring del Vision): baseline, tráfico actual, descartado y legítimo de BDoS por protocolo (entrada/salida, IPv4/IPv6, estado de aprendizaje y anomalía) y de DNS por tipo de consulta. `?policy=` obligatorio | 10 s |
 | `GET` | `/api/v1/analytics` | Network analytics: tráfico total y por puerto, utilización por política y agregados del log (top ataques, orígenes, destinos, puertos y políticas) | 5 s – 10 s |
 
 ¹ Uptime, fecha y hora se leen siempre en vivo.
-² La tabla de usuarios se lee siempre en vivo y nunca se cachea, porque el equipo la entrega con el campo de contraseña. Ese campo no se expone.
 
 ### Filtros de `/api/v1/attacks`
 
@@ -211,7 +226,10 @@ curl -k -H "Authorization: Bearer $TOKEN" "$API/api/v1/analytics?policy=Pol_WWW&
 
 ### Formato de respuesta
 
-Cada endpoint devuelve un elemento por equipo en `data`, con su identidad incluida. Los equipos que no respondieron aparecen en `errors`.
+Cada endpoint devuelve un elemento por equipo en `data`, con su identidad, la hora de lectura (`collectedAt`, RFC3339 UTC, útil como `@timestamp`) y, si alguna sub-lectura falló, la lista `errors` dentro del elemento: ese dato quedó vacío y **no** debe tomarse como 0 real. Los equipos que no respondieron aparecen en el `errors` de nivel superior.
+
+> [!IMPORTANT]
+> Los valores de `/traffic/*` son el **promedio por segundo de los últimos 15 s** que calcula el equipo (gauges, aunque el MIB los declare `Counter64`). En ELK se grafican tal cual: no hay que calcular deltas. Están en **bytes**, no bits (`receivedMbps` ya viene convertido).
 
 ```json
 {
@@ -274,6 +292,7 @@ Variables de entorno, definidas en `.env` (ver [`.env.example`](.env.example)):
 | `ALLOWED_ORIGINS` | `*` | Orígenes CORS permitidos (CSV) |
 | `DEVICE_MAX_CONCURRENCY` | `1` | Llamadas simultáneas (SOAP y SNMP) por equipo |
 | `DEVICE_MIN_CALL_GAP` | `100ms` | Pausa mínima entre llamadas al mismo equipo |
+| `DEVICE_BUSY_CPU_PCT` | `85` | Si la CPU del equipo supera este %, las consultas pesadas (`attacks`, `analytics`, `behavioral`, `behavioral/traffic`, `profiles`, `management`) se omiten sin tocarlo. `0` desactiva |
 | `PUBLIC_HTTPS_PORT` | `5687` | Puerto público HTTPS de Traefik |
 | `AUTH_DISABLED` | *(vacío)* | `true` desactiva la autenticación. Sólo para desarrollo |
 
@@ -308,7 +327,13 @@ alias admin='docker compose exec app defensepro-admin'
 | `remove-device <name>` | Elimina un equipo |
 | `test-device <name>` | Prueba la conexión SOAP con el equipo |
 | `cli <name> "<comando>"` | Ejecuta un comando CLI en el equipo vía SOAP (sólo diagnóstico; la API HTTP no lo expone) |
-| `soap-call <name> <servicio> <operación>` | Muestra el XML crudo de cualquier operación SOAP |
+| `soap-call <name> <servicio> <operación>` | Muestra el XML crudo de una operación SOAP de lectura |
+| `cli <name> "<comando>"` | Ejecuta uno de los comandos CLI de lectura permitidos |
+| `set-snmp <name> <user> <auth> <auth-pass> <priv> <priv-pass> [puerto]` | Configura SNMPv3 (auth `MD5`/`SHA`/`SHA256`...; priv `DES`/`AES`/`AES256`.../`NONE`) |
+| `clear-snmp <name>` | Quita la configuración SNMP |
+| `test-snmp <name>` | Prueba SNMP con el equipo |
+| `snmp-walk <name> <oid>` | Walk de diagnóstico, sólo sobre ramas permitidas |
+| `snmp-allowlist` | Lista las ramas SNMP permitidas |
 | `create-token <name>` | Emite un token de acceso (se muestra una sola vez) |
 | `list-tokens` | Lista los tokens (id, nombre, creación, último uso, estado) |
 | `revoke-token <id>` | Revoca un token |
@@ -397,7 +422,7 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | Endpoint | Servicios y operaciones |
 |---|---|
 | `system` | `Device.SystemParameters`: get_DeviceName, Description, Location, Contact, SystemUpTime, Date, Time · `Device.Information`: get_Platform, SoftwareVersion, BuildNumber, rdwrDPVersion, SysBaseMACAddress, RamSize · `Device.Mitigation`: get_Device · `Security.Operation`: get_Device · `Device.HighAvailability`: get_haProtectionState · `Security.Version`: get_SecurityModuleVersion · `Security.AttackDB`: get_Version · `Management.VersionControl`: getAll_SoftwareVersion |
-| `licenses` | `Management.LicenseAdmin`: get_LicenseId, LicenseKey, TplLicense, TplLicenseId, TplLicenseMethod, TplLicenseIP · `Device.Information`: get_DeviceAttackMitigation, DeviceThroughput · `Security.ErtAttackersFeedStatus`: get_Status |
+| `licenses` | `Management.LicenseAdmin`: get_LicenseId, TplLicense, TplLicenseId, TplLicenseMethod, TplLicenseIP · `Device.Information`: get_DeviceAttackMitigation, DeviceThroughput · `Security.ErtAttackersFeedStatus`: get_Status |
 | `monitoring` | `Device.Utilization`: get_ResourceUtilization, Last5SecondAverageUtilization, Last60SecondsUtilzation, rsSysUtilEnginesCpuMean, SysUtilRAM\*, SysUtilDisk\* · `Device.Statistics`: get_TotalLastSecMbits · `Device.HardwareInfo`: get_TotalLastSecPeak, getAll_EngineResource · `Device.SessionTable`: get_UsedEntriesNumber |
 | `hardware` | `Device.HardwareInfo`: getAll_CpuTemperature, getAll_SystemFans, get_DualPsuStatus |
 | `interfaces` | `Networking.Interfaces`: getAll_L2Interface, getAll_PhysicalInterface · `Device.Statistics`: getAll_PortLastSec |
@@ -411,10 +436,21 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | `blocklists` | `Security.AccessLists`: getAll_BlackList, getAll_WhiteList |
 | `geo` | `Security.GeoPolicyDynamicRule` getAll_GeoPolicyDynamicRule · `Security.GeoPolicyTemporaryRule` getAll_GeoPolicyTemporaryRule · `Security.GeoAssocCountries` getAll_GeoAssocCountriesEntry · `Security.GeoExcludedIPList` getAll_GeoExcludedIPListEntry |
 | `capacity` | `Device.SessionTable` get_UsedEntriesNumber · `Device.Tuning` get_SessionsCurrent · `Security.SuspendTable` get_SuspendTableEntries · `Security.AuthenticationTables` get_Tcp/HttpAuthenticationTableUtilization · `Security.Policy` get_TotalPolicyNum, HwEntriesUtil, SubPolicyUtil · `Security.Tuning`: \*Current y tamaños de tablas de autenticación |
-| `management` | `Management.Web`, `Management.Ssh`, `Management.Telnet`: estado y puertos · `Management.Access`: get_UserAuthentication, RadiusServer, TacacsMainServerIP, getAll_User · `Management.Services`: NTP · `Device.DNSClient` · `Management.Reporting` get_SyslogGlobalStatus · `Management.SyslogServers` getAll_SyslogServersTable |
+| `management` | `Management.Web`, `Management.Ssh`, `Management.Telnet`: estado y puertos · `Management.Access`: get_UserAuthentication, RadiusServer, TacacsMainServerIP · `Management.Services`: NTP · `Device.DNSClient` · `Management.Reporting` get_SyslogGlobalStatus · `Management.SyslogServers` getAll_SyslogServersTable |
 | `behavioral/traffic` | `Security.Policy` getAll_Policy (valida la política) · `CLI.Command` apply_CLICommand con los comandos fijos `system internal security bdos statistics get <política>` y `system internal security dns statistics get <política>`. La salida de texto se convierte a JSON; sólo se aceptan nombres que existen en el equipo |
 | `analytics` | `Device.Statistics`: get_TotalLastSecMbits, getAll_PortLastSec · `Device.HardwareInfo`: get_TotalLastSecPeak · `Security.PolicyUtil`: getAll_PolicyUtil · `Security.Reporting`: getAll_Log |
 | `protections` | get_Status de `Security.BehavioralDoS`, `SynProtection`, `HTTPSFloodProtection`, `AntiScanning`, `SignatureProtection` (+ get_DosShieldStatus), `ErtAttackersFeedStatus` · `Security.StatefulInspection`: get_status · `Security.DnsProtection`: get_DnsProtectionGlobalStatus · `Security.BehavioralDoS`: getAll_Profiles |
+
+### SNMP (MIBs DefensePro 8.34.2.0)
+
+| Endpoint | Objetos |
+|---|---|
+| `traffic/policies` | `rsTrafficUtilizationPerPolicyTable{UDP,TCP,ICMP,OTHER,SCTP,IGMP}` (`.1.3.6.1.4.1.89.35.1.65.188.4`) |
+| `traffic/ports` | `rsTrafficUtilizationPerPortTable*` (`…65.188.3`), `rsPortsStatsTable` (`…122.59`), `rsPortStatsTotalInMbitsPerSec` |
+| `sessions` | `rsTrafficUtilizationConcurrentConnectionsTCP/UDP`, `rsSESSIONTotalUsed`, `rsSESSIONUsedEntriesTable` |
+| `syn-triggers` | `rsSESSIONSynActivationTable` (`…104.42`) |
+| `health` | `rsWSD(RS)ResourceUtilization`, `rdwr5/60SecAvgResourceUtilization`, `rsSysUtil*`, `rdwrTemperature*`, `rsHWCPUTemperatureTable`, `rsACCResourceTable`, `rdwrPowerSupply*`, `rdwrDPHighAvailability*`, `rsWSDSysUpTime/ManagedTime/ManagedDate`, `rsIDSSuspendTable*`, `rs{Tcp,Http,Dns}AuthenListUtilization`, `rsIDSHwPolicies*`, `rsErtAttackersFeedStatus`, `rdwrSyslogServerTable` |
+| `info` | `sysDescr`, `sysName`, `sysUpTime`, `rndBrgVersion`, `rndSerialNumber`, `rndApsoluteOSVersion`, `rdwrDeviceType`, `rdwrDevicePortsConfig`, `rdwrDeviceThroughput`, `rsCoresNumber`, `rdwrDeviceAttackMitigation`, `rsWSDSysBaseMACAddress` |
 
 > RAM y disco (`used`, `capacity`) se reportan en la unidad que entrega el equipo; el WSDL no la documenta.
 
@@ -459,11 +495,14 @@ Las pruebas no necesitan un equipo real: usan un DefensePro simulado (`httptest`
 
 ## Seguridad
 
-- La API es **de sólo lectura**: únicamente ejecuta operaciones `get_*` / `getAll_*`. El servicio `CLI.Command` del DefensePro, que permite ejecutar comandos arbitrarios, no se expone de forma intencional.
-- Nunca se leen secretos del equipo (claves RADIUS/TACACS+). La tabla de usuarios trae contraseñas: ese campo no se mapea y la respuesta no se cachea.
+- La API es **de sólo lectura, garantizado en código**:
+  - El cliente SOAP rechaza, antes de tocar la red, toda operación que no sea `get_`/`getAll_`/`getFirst_`/`getNext_` y sólo admite 3 comandos CLI fijos de lectura. Aplica también al CLI de administración.
+  - El cliente SNMP no tiene ningún método de escritura (un test verifica que el código no llame a `Set`) y sólo consulta ramas de una allowlist; el walk completo del árbol, las comunidades, la base de firmas y los objetos de reset de baseline quedan fuera.
+- Nunca se leen secretos: las 18 operaciones SOAP que devuelven claves (RADIUS/TACACS+, licencia, clave privada, contraseñas de usuarios, claves SNMP, passphrase de certificados) están bloqueadas.
+- Freno por carga: si la CPU del equipo supera `DEVICE_BUSY_CPU_PCT`, las consultas pesadas se omiten.
+- Las credenciales SOAP y SNMP de los equipos se guardan **en texto plano** en PostgreSQL: protege el host, el volumen de la base y los backups.
 - Los tokens se guardan hasheados con SHA-256 y sólo se muestran al crearlos.
 - Por defecto el puerto público sólo escucha en loopback y TLS exige al menos TLS 1.2.
-- Las credenciales de los equipos se almacenan en PostgreSQL: protege el acceso al host y a los volúmenes de Docker.
 - `.env` y los certificados están excluidos del repositorio.
 
 ---

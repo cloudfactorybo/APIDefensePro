@@ -81,6 +81,7 @@ func main() {
 	multi := service.NewMultiDefenseProService(devicesRepo, httpClient, logger, respCache, service.Limits{
 		MaxConcurrency: cfg.Device.MaxConcurrency,
 		MinCallGap:     cfg.Device.MinCallGap,
+		BusyCPUPercent: cfg.Device.BusyCPUPercent,
 	})
 
 	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), refreshTimeout)
@@ -128,6 +129,12 @@ func main() {
 	v1.HandleFunc("/behavioral/traffic", apiHandler.BehavioralTraffic).Methods(http.MethodGet)
 	v1.HandleFunc("/analytics", apiHandler.Analytics).Methods(http.MethodGet)
 	v1.HandleFunc("/networks", apiHandler.Networks).Methods(http.MethodGet)
+	v1.HandleFunc("/traffic/policies", apiHandler.TrafficPolicies).Methods(http.MethodGet)
+	v1.HandleFunc("/traffic/ports", apiHandler.TrafficPorts).Methods(http.MethodGet)
+	v1.HandleFunc("/sessions", apiHandler.Sessions).Methods(http.MethodGet)
+	v1.HandleFunc("/syn-triggers", apiHandler.SynTriggers).Methods(http.MethodGet)
+	v1.HandleFunc("/health", apiHandler.DeviceHealth).Methods(http.MethodGet)
+	v1.HandleFunc("/info", apiHandler.DeviceInfo).Methods(http.MethodGet)
 	v1.HandleFunc("/blocklists", apiHandler.AccessLists).Methods(http.MethodGet)
 	v1.HandleFunc("/geo", apiHandler.Geo).Methods(http.MethodGet)
 	v1.HandleFunc("/capacity", apiHandler.Capacity).Methods(http.MethodGet)
