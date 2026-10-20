@@ -2,7 +2,8 @@ package models
 
 type Policies struct {
 	DeviceRef
-	TotalPolicies        int64    `json:"totalPolicies"` // las two-way cuentan doble
+	ConfiguredPolicies   int      `json:"configuredPolicies"` // filas de getAll_Policy, sin filtro
+	TotalPolicies        int64    `json:"totalPolicies"`      // get_TotalPolicyNum (two-way cuentan doble); algunos equipos reportan 0
 	HwEntriesUtilization int64    `json:"hwEntriesUtilization"`
 	SubPolicyUtilization int64    `json:"subPolicyUtilization"`
 	UpdateRequired       string   `json:"updateRequired"`

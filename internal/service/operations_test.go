@@ -79,6 +79,9 @@ func TestGetCapacity(t *testing.T) {
 		"Security.Tuning#get_SuspendTableCurrent":                             val("100000"),
 		"Security.AuthenticationTables#get_TcpAuthenticationTableUtilization": val("12"),
 		"Security.Tuning#get_TcpAuthenticationTableSize":                      val("512000"),
+		"Device.SessionTable#get_Status":                                      val("Disabled"),
+		"Security.Policy#getAll_Policy":                                       tbl("<PolicyName>Pol_DNS</PolicyName>", "<PolicyName>Pol_APP</PolicyName>"),
+		"Security.Policy#get_TotalPolicyNum":                                  val("0"),
 		"Security.Tuning#get_BDosPoliciesCurrent":                             val("128"),
 	})
 
@@ -95,7 +98,10 @@ func TestGetCapacity(t *testing.T) {
 	if out.TCPAuthentication.UtilizationPercent != 12 || out.TCPAuthentication.Used != nil || out.TCPAuthentication.Capacity != 512000 {
 		t.Errorf("tcp auth = %+v", out.TCPAuthentication)
 	}
-	if out.Policies.MaxBDoSPolicies != 128 {
+	if out.SessionTable.Status != "Disabled" {
+		t.Errorf("session status = %q", out.SessionTable.Status)
+	}
+	if out.Policies.MaxBDoSPolicies != 128 || out.Policies.Configured != 2 || out.Policies.Total != 0 {
 		t.Errorf("policies = %+v", out.Policies)
 	}
 }

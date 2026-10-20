@@ -136,6 +136,9 @@ func TestGetMonitoringPartial(t *testing.T) {
 	s, _ := newTestService(t, map[string]string{
 		"Device.Utilization#get_ResourceUtilization":   val("37"),
 		"Device.Utilization#get_SysUtilRAMUtilization": val("61"),
+		// Valores reales de un DefensePro con la session table deshabilitada.
+		"Device.HardwareInfo#get_TotalLastSecPeak": val("2942624205"),
+		"Device.SessionTable#get_Status":           val("Disabled"),
 		"Device.HardwareInfo#getAll_EngineResource": tbl(
 			"<Engine>0</Engine><Forwarding>20</Forwarding><Other>5</Other><Idle>75</Idle><Total>25</Total>",
 			"<Engine>1</Engine><Forwarding>30</Forwarding><Other>2</Other><Idle>68</Idle><Total>32</Total>",
@@ -151,6 +154,12 @@ func TestGetMonitoringPartial(t *testing.T) {
 	}
 	if len(out.Engines) != 2 || out.Engines[1].Total != 32 {
 		t.Errorf("engines = %+v", out.Engines)
+	}
+	if out.Traffic.PeakBps != 2942624205 || out.Traffic.PeakMbps != 2942.62 {
+		t.Errorf("traffic = %+v, want peakMbps 2942.62", out.Traffic)
+	}
+	if out.SessionTable.Status != "Disabled" {
+		t.Errorf("sessionTable = %+v", out.SessionTable)
 	}
 }
 
@@ -172,7 +181,7 @@ func TestGetPoliciesMergeAndFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.TotalPolicies != 3 || len(out.Policies) != 2 {
+	if out.TotalPolicies != 3 || out.ConfiguredPolicies != 2 || len(out.Policies) != 2 {
 		t.Fatalf("policies = %+v", out)
 	}
 	web := out.Policies[0]
@@ -188,7 +197,7 @@ func TestGetPoliciesMergeAndFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered.Policies) != 1 || filtered.Policies[0].Name != "DNS" {
+	if len(filtered.Policies) != 1 || filtered.Policies[0].Name != "DNS" || filtered.ConfiguredPolicies != 2 {
 		t.Errorf("filtro = %+v", filtered.Policies)
 	}
 }

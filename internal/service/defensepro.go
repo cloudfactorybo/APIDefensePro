@@ -271,13 +271,15 @@ func (s *DefenseProService) GetMonitoring(ctx context.Context) (*models.Monitori
 		s.scalar(soap.DeviceUtilization, "get_SysUtilDiskUsed", statsTTL, &out.Disk.Used),
 		s.scalar(soap.DeviceUtilization, "get_SysUtilDiskCapacity", staticTTL, &out.Disk.Capacity),
 		s.scalar(soap.DeviceStatistics, "get_TotalLastSecMbits", statsTTL, &out.Traffic.LastSecondMbits),
-		s.scalar(soap.DeviceHardwareInfo, "get_TotalLastSecPeak", statsTTL, &out.Traffic.PeakMbps),
+		s.scalar(soap.DeviceHardwareInfo, "get_TotalLastSecPeak", statsTTL, &out.Traffic.PeakBps),
+		s.scalar(soap.DeviceSessionTable, "get_Status", configTTL, &out.SessionTable.Status),
 		s.scalar(soap.DeviceSessionTable, "get_UsedEntriesNumber", statsTTL, &out.SessionTable.UsedEntries),
 		table(s, soap.DeviceHardwareInfo, "getAll_EngineResource", statsTTL, &out.Engines),
 	)
 	if err != nil {
 		return nil, err
 	}
+	out.Traffic.SetPeakMbps()
 	return out, nil
 }
 
@@ -352,6 +354,7 @@ func (s *DefenseProService) GetPolicies(ctx context.Context, names []string) (*m
 		resByName[r.Name] = append(resByName[r.Name], r)
 	}
 
+	out.ConfiguredPolicies = len(out.Policies)
 	filter := toSet(names)
 	policies := make([]models.Policy, 0, len(out.Policies))
 	for _, p := range out.Policies {

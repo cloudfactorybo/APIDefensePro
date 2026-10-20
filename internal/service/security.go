@@ -98,7 +98,7 @@ func (s *DefenseProService) GetAnalytics(ctx context.Context, f models.AttackFil
 	var log []models.Attack
 	err := s.gather(ctx,
 		s.scalar(soap.DeviceStatistics, "get_TotalLastSecMbits", statsTTL, &out.Traffic.LastSecondMbits),
-		s.scalar(soap.DeviceHardwareInfo, "get_TotalLastSecPeak", statsTTL, &out.Traffic.PeakMbps),
+		s.scalar(soap.DeviceHardwareInfo, "get_TotalLastSecPeak", statsTTL, &out.Traffic.PeakBps),
 		table(s, soap.DeviceStatistics, "getAll_PortLastSec", statsTTL, &out.PortTraffic),
 		table(s, soap.SecurityPolicyUtil, "getAll_PolicyUtil", statsTTL, &out.PolicyUtilization),
 		table(s, soap.SecurityReporting, "getAll_Log", attacksTTL, &log),
@@ -106,6 +106,7 @@ func (s *DefenseProService) GetAnalytics(ctx context.Context, f models.AttackFil
 	if err != nil {
 		return nil, err
 	}
+	out.Traffic.SetPeakMbps()
 
 	if policies := toSet(f.Policies); policies != nil {
 		out.PolicyUtilization = slices.DeleteFunc(out.PolicyUtilization, func(u models.PolicyUtil) bool {

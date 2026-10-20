@@ -89,9 +89,12 @@ func (s *DefenseProService) GetGeo(ctx context.Context) (*models.Geo, error) {
 func (s *DefenseProService) GetCapacity(ctx context.Context) (*models.Capacity, error) {
 	out := &models.Capacity{}
 	var sessionUsed, suspendUsed, tcpAuthUtil, httpAuthUtil int64
+	var policies []models.Policy
 	p, l := &out.Policies, &out.Limits
 	err := s.gather(ctx,
 		s.scalar(soap.DeviceSessionTable, "get_UsedEntriesNumber", statsTTL, &sessionUsed),
+		s.scalar(soap.DeviceSessionTable, "get_Status", configTTL, &out.SessionTable.Status),
+		table(s, soap.SecurityPolicy, "getAll_Policy", configTTL, &policies),
 		s.scalar(soap.DeviceTuning, "get_SessionsCurrent", staticTTL, &out.SessionTable.Capacity),
 		s.scalar(soap.SecuritySuspendTable, "get_SuspendTableEntries", statsTTL, &suspendUsed),
 		s.scalar(soap.SecurityTuning, "get_SuspendTableCurrent", staticTTL, &out.SuspendTable.Capacity),
@@ -119,6 +122,7 @@ func (s *DefenseProService) GetCapacity(ctx context.Context) (*models.Capacity, 
 		return nil, err
 	}
 
+	p.Configured = len(policies)
 	setUsage(&out.SessionTable, sessionUsed)
 	setUsage(&out.SuspendTable, suspendUsed)
 	out.TCPAuthentication.UtilizationPercent = float64(tcpAuthUtil)

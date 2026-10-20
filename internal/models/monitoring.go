@@ -37,11 +37,20 @@ type ResourceUsage struct {
 
 type TrafficStats struct {
 	LastSecondMbits int64 `json:"lastSecondMbits"` // get_TotalLastSecMbits
-	PeakMbps        int64 `json:"peakMbps"`        // get_TotalLastSecPeak
+	// get_TotalLastSecPeak: el WSDL dice Mbps, pero un equipo real devolvió
+	// 2942624205, que sólo tiene sentido en bits/s (≈2.9 Gbps).
+	PeakBps  int64   `json:"peakBps"`
+	PeakMbps float64 `json:"peakMbps"` // PeakBps / 1e6, calculado
+}
+
+// SetPeakMbps calcula PeakMbps (2 decimales) a partir de PeakBps.
+func (t *TrafficStats) SetPeakMbps() {
+	t.PeakMbps = float64(t.PeakBps/10000) / 100
 }
 
 type SessionTableStats struct {
-	UsedEntries int64 `json:"usedEntries"`
+	Status      string `json:"status"` // si está Disabled, UsedEntries siempre es 0
+	UsedEntries int64  `json:"usedEntries"`
 }
 
 type Hardware struct {

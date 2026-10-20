@@ -91,13 +91,15 @@ type Capacity struct {
 // equipo (tablas de autenticación, que no informan Used) o se calcula como
 // Used/Capacity.
 type TableUsage struct {
+	Status             string  `json:"status,omitempty"` // sólo session table
 	Used               *int64  `json:"used,omitempty"`
 	Capacity           int64   `json:"capacity"`
 	UtilizationPercent float64 `json:"utilizationPercent"`
 }
 
 type PolicyCapacity struct {
-	Total                int64 `json:"total"`
+	Configured           int   `json:"configured"` // filas de getAll_Policy
+	Total                int64 `json:"total"`      // get_TotalPolicyNum; algunos equipos reportan 0
 	MaxBDoSPolicies      int64 `json:"maxBdosPolicies"`
 	MaxDNSPolicies       int64 `json:"maxDnsPolicies"`
 	HwEntriesUtilization int64 `json:"hwEntriesUtilization"`
