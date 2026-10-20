@@ -292,6 +292,7 @@ Variables de entorno, definidas en `.env` (ver [`.env.example`](.env.example)):
 | `ALLOWED_ORIGINS` | `*` | Orígenes CORS permitidos (CSV) |
 | `DEVICE_MAX_CONCURRENCY` | `1` | Llamadas simultáneas (SOAP y SNMP) por equipo |
 | `DEVICE_MIN_CALL_GAP` | `100ms` | Pausa mínima entre llamadas al mismo equipo |
+| `TZ` | `UTC` | Zona horaria de los relojes de los DefensePro (ej. `America/La_Paz`); `/health` calcula `clock.offsetSeconds` contra ella |
 | `DEVICE_BUSY_CPU_PCT` | `85` | Si la CPU del equipo supera este %, las consultas pesadas (`attacks`, `analytics`, `behavioral`, `behavioral/traffic`, `profiles`, `management`) se omiten sin tocarlo. `0` desactiva |
 | `PUBLIC_HTTPS_PORT` | `5687` | Puerto público HTTPS de Traefik |
 | `AUTH_DISABLED` | *(vacío)* | `true` desactiva la autenticación. Sólo para desarrollo |

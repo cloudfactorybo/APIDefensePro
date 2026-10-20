@@ -51,6 +51,8 @@ services:
       DEVICE_MAX_CONCURRENCY: ${DEVICE_MAX_CONCURRENCY:-1}
       DEVICE_MIN_CALL_GAP: ${DEVICE_MIN_CALL_GAP:-100ms}
       DEVICE_BUSY_CPU_PCT: ${DEVICE_BUSY_CPU_PCT:-85}
+      # Zona horaria de los DefensePro: /health compara su reloj con el del contenedor.
+      TZ: ${TZ:-UTC}
     depends_on:
       postgres:
         condition: service_healthy
