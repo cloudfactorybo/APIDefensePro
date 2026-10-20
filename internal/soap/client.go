@@ -51,6 +51,9 @@ func (c *Client) Endpoint() string { return c.endpoint }
 // interpreta con Decode. Separarlo permite cachear el XML tal cual. Un SOAP
 // Fault (normalmente con HTTP 500) se devuelve como *Fault.
 func (c *Client) Call(ctx context.Context, svc Service, op string, params ...Param) ([]byte, error) {
+	if err := CheckReadOnly(svc, op, params...); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(BuildEnvelope(svc, op, params...)))
 	if err != nil {
 		return nil, fmt.Errorf("creando request: %w", err)

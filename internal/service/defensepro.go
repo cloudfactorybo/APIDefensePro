@@ -32,19 +32,16 @@ type DefenseProService struct {
 	client *soap.Client
 	logger *logrus.Logger
 	cache  *cache.Cache
-	sem    chan struct{}
+	gate   *gate
 }
 
-func NewDefenseProService(name, baseURL, username, password string, client *http.Client, logger *logrus.Logger, c *cache.Cache, maxConcurrency int) *DefenseProService {
-	if maxConcurrency < 1 {
-		maxConcurrency = 1
-	}
+func NewDefenseProService(name, baseURL, username, password string, client *http.Client, logger *logrus.Logger, c *cache.Cache, limits Limits) *DefenseProService {
 	return &DefenseProService{
 		name:   name,
 		client: soap.NewClient(baseURL, username, password, client),
 		logger: logger,
 		cache:  c,
-		sem:    make(chan struct{}, maxConcurrency),
+		gate:   newGate(limits),
 	}
 }
 
@@ -74,14 +71,12 @@ func (s *DefenseProService) call(ctx context.Context, ttl time.Duration, svc soa
 		}
 	}
 
-	select {
-	case s.sem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if err := s.gate.acquire(ctx); err != nil {
+		return nil, err
 	}
 	start := time.Now()
 	body, err := s.client.Call(ctx, svc, op, params...)
-	<-s.sem
+	s.gate.release()
 
 	if err != nil {
 		return nil, fmt.Errorf("%s.%s: %w", svc.Name(), op, err)
@@ -153,12 +148,16 @@ func table[T any](s *DefenseProService, svc soap.Service, op string, ttl time.Du
 	}}
 }
 
+// errorSink recibe las sub-lecturas fallidas (models.DeviceRef lo implementa).
+type errorSink interface{ AddError(string) }
+
 // gather ejecuta las lecturas de un endpoint. La primera hace de sonda: si
 // falla por transporte o auth (equipo caído, SOAP deshabilitado, credenciales
 // malas) se aborta sin disparar el resto, que solo acumularía timeouts. Las
 // demás van en paralelo (acotadas por el semáforo) y son best-effort: un dato
-// que falla queda en cero. Solo es error si fallan todas.
-func (s *DefenseProService) gather(ctx context.Context, tasks ...task) error {
+// que falla queda en cero y se informa en sink (nunca en silencio). Solo es
+// error si fallan todas.
+func (s *DefenseProService) gather(ctx context.Context, sink errorSink, tasks ...task) error {
 	if len(tasks) == 0 {
 		return nil
 	}
@@ -181,6 +180,9 @@ func (s *DefenseProService) gather(ctx context.Context, tasks ...task) error {
 			continue
 		}
 		failed++
+		if sink != nil {
+			sink.AddError(err.Error()) // ya incluye Servicio.operación
+		}
 		entry := s.logCtx(ctx).WithField("op", tasks[i].name).WithError(err)
 		if isFault(err) {
 			// El equipo respondió que no: típico de funciones que el modelo no
@@ -213,7 +215,7 @@ func (s *DefenseProService) Ping(ctx context.Context) error {
 
 func (s *DefenseProService) GetSystemInfo(ctx context.Context) (*models.SystemInfo, error) {
 	out := &models.SystemInfo{InstalledVersions: []models.SoftwareVersion{}}
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		// Sin cache y primero: hace de sonda real de alcanzabilidad.
 		s.scalar(soap.DeviceSystemParameters, "get_SystemUpTime", 0, &out.UpTime),
 		s.scalar(soap.DeviceSystemParameters, "get_Date", 0, &out.Date),
@@ -243,9 +245,8 @@ func (s *DefenseProService) GetSystemInfo(ctx context.Context) (*models.SystemIn
 
 func (s *DefenseProService) GetLicenses(ctx context.Context) (*models.Licenses, error) {
 	out := &models.Licenses{}
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		s.scalar(soap.ManagementLicenseAdmin, "get_LicenseId", staticTTL, &out.LicenseID),
-		s.scalar(soap.ManagementLicenseAdmin, "get_LicenseKey", staticTTL, &out.LicenseKey),
 		s.scalar(soap.ManagementLicenseAdmin, "get_TplLicense", staticTTL, &out.ThroughputLicense),
 		s.scalar(soap.ManagementLicenseAdmin, "get_TplLicenseId", staticTTL, &out.ThroughputLicenseID),
 		s.scalar(soap.ManagementLicenseAdmin, "get_TplLicenseMethod", staticTTL, &out.ThroughputLicenseMethod),
@@ -262,7 +263,7 @@ func (s *DefenseProService) GetLicenses(ctx context.Context) (*models.Licenses, 
 
 func (s *DefenseProService) GetMonitoring(ctx context.Context) (*models.Monitoring, error) {
 	out := &models.Monitoring{Engines: []models.EngineResource{}}
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		s.scalar(soap.DeviceUtilization, "get_ResourceUtilization", statsTTL, &out.CPU.ResourceUtilization),
 		s.scalar(soap.DeviceUtilization, "get_Last5SecondAverageUtilization", statsTTL, &out.CPU.EnginesAvg5s),
 		s.scalar(soap.DeviceUtilization, "get_Last60SecondsUtilzation", statsTTL, &out.CPU.EnginesAvg60s), // sic en el WSDL
@@ -288,7 +289,7 @@ func (s *DefenseProService) GetMonitoring(ctx context.Context) (*models.Monitori
 
 func (s *DefenseProService) GetHardware(ctx context.Context) (*models.Hardware, error) {
 	out := &models.Hardware{CPUTemperatures: []models.CPUTemperature{}, Fans: []models.Fan{}}
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		table(s, soap.DeviceHardwareInfo, "getAll_CpuTemperature", statsTTL, &out.CPUTemperatures),
 		table(s, soap.DeviceHardwareInfo, "getAll_SystemFans", statsTTL, &out.Fans),
 		s.scalar(soap.DeviceHardwareInfo, "get_DualPsuStatus", statsTTL, &out.PowerSupply),
@@ -305,7 +306,7 @@ func (s *DefenseProService) GetInterfaces(ctx context.Context) (*models.Interfac
 		PhysicalPorts: []models.PhysicalPort{},
 		PortTraffic:   []models.PortTraffic{},
 	}
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		table(s, soap.NetworkingInterfaces, "getAll_L2Interface", statsTTL, &out.Interfaces),
 		table(s, soap.NetworkingInterfaces, "getAll_PhysicalInterface", configTTL, &out.PhysicalPorts),
 		table(s, soap.DeviceStatistics, "getAll_PortLastSec", statsTTL, &out.PortTraffic),
@@ -318,7 +319,7 @@ func (s *DefenseProService) GetInterfaces(ctx context.Context) (*models.Interfac
 
 func (s *DefenseProService) GetNetwork(ctx context.Context) (*models.Network, error) {
 	out := &models.Network{IPInterfaces: []models.IPInterface{}, Routes: []models.Route{}}
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		table(s, soap.NetworkingInterfacesNG, "getAll_IpInterface", configTTL, &out.IPInterfaces),
 		table(s, soap.NetworkingStaticRoute, "getAll_Route", configTTL, &out.Routes),
 	)
@@ -334,7 +335,7 @@ func (s *DefenseProService) GetPolicies(ctx context.Context, names []string) (*m
 	out := &models.Policies{Policies: []models.Policy{}}
 	var utils []models.PolicyUtil
 	var resources []models.PolicyResource
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		table(s, soap.SecurityPolicy, "getAll_Policy", configTTL, &out.Policies),
 		table(s, soap.SecurityPolicyUtil, "getAll_PolicyUtil", statsTTL, &utils),
 		table(s, soap.SecurityPolicy, "getAll_PoliciesResources", configTTL, &resources),
@@ -379,7 +380,7 @@ func (s *DefenseProService) GetPolicies(ctx context.Context, names []string) (*m
 
 func (s *DefenseProService) GetAttacks(ctx context.Context, f models.AttackFilter) (*models.Attacks, error) {
 	var entries []models.Attack
-	if err := s.gather(ctx, table(s, soap.SecurityReporting, "getAll_Log", attacksTTL, &entries)); err != nil {
+	if err := s.gather(ctx, nil, table(s, soap.SecurityReporting, "getAll_Log", attacksTTL, &entries)); err != nil {
 		return nil, err
 	}
 	return buildAttacks(entries, f), nil
@@ -387,7 +388,7 @@ func (s *DefenseProService) GetAttacks(ctx context.Context, f models.AttackFilte
 
 func (s *DefenseProService) GetSuspended(ctx context.Context) (*models.SuspendTable, error) {
 	out := &models.SuspendTable{Entries: []models.SuspendEntry{}}
-	if err := s.gather(ctx, table(s, soap.SecuritySuspendTable, "getAll_NewerSuspend", statsTTL, &out.Entries)); err != nil {
+	if err := s.gather(ctx, out, table(s, soap.SecuritySuspendTable, "getAll_NewerSuspend", statsTTL, &out.Entries)); err != nil {
 		return nil, err
 	}
 	out.Total = len(out.Entries)
@@ -397,7 +398,7 @@ func (s *DefenseProService) GetSuspended(ctx context.Context) (*models.SuspendTa
 func (s *DefenseProService) GetProtections(ctx context.Context) (*models.Protections, error) {
 	out := &models.Protections{BDoSProfiles: []models.BDoSProfile{}}
 	st := &out.Status
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		s.scalar(soap.SecurityBehavioralDoS, "get_Status", configTTL, &st.BehavioralDoS),
 		s.scalar(soap.SecuritySynProtection, "get_Status", configTTL, &st.SynProtection),
 		s.scalar(soap.SecurityDnsProtection, "get_DnsProtectionGlobalStatus", configTTL, &st.DNSProtection),

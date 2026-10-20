@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -92,7 +93,7 @@ func newTestService(t *testing.T, parts map[string]string) (*DefenseProService, 
 	fake := &fakeDP{parts: parts}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
-	return NewDefenseProService("dp1", srv.URL, "u", "p", srv.Client(), quietLogger(), nil, 4), fake
+	return NewDefenseProService("dp1", srv.URL, "u", "p", srv.Client(), quietLogger(), nil, Limits{MaxConcurrency: 4}), fake
 }
 
 func TestGetSystemInfo(t *testing.T) {
@@ -139,7 +140,7 @@ func TestGatherProbeAbortsOnTransportError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewDefenseProService("dp1", srv.URL, "u", "bad", srv.Client(), quietLogger(), nil, 4)
+	s := NewDefenseProService("dp1", srv.URL, "u", "bad", srv.Client(), quietLogger(), nil, Limits{MaxConcurrency: 4})
 	_, err := s.GetMonitoring(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("err = %v, want auth 401", err)
@@ -271,7 +272,7 @@ func TestFanOutAndUnknown(t *testing.T) {
 	ok, _ := newTestService(t, map[string]string{
 		"Device.HardwareInfo#get_DualPsuStatus": val("doublePwrSupplyOk"),
 	})
-	bad := NewDefenseProService("dp2", "http://127.0.0.1:1", "u", "p", http.DefaultClient, quietLogger(), nil, 1)
+	bad := NewDefenseProService("dp2", "http://127.0.0.1:1", "u", "p", http.DefaultClient, quietLogger(), nil, Limits{MaxConcurrency: 1})
 
 	m := &MultiDefenseProService{logger: quietLogger(), devices: []*Device{
 		{Name: "dp1", URL: "https://10.0.0.1", IP: "10.0.0.1", Service: ok},
@@ -286,10 +287,17 @@ func TestFanOutAndUnknown(t *testing.T) {
 		t.Errorf("errs = %+v", errs)
 	}
 
-	// La identidad del equipo va aplanada al nivel de los datos.
+	// La identidad del equipo va aplanada al nivel de los datos, con la hora de
+	// lectura y las sub-lecturas que fallaron (nunca datos parciales en silencio).
 	raw, _ := json.Marshal(results[0])
-	if !strings.HasPrefix(string(raw), `{"deviceName":"dp1","deviceUrl":"https://10.0.0.1","deviceIp":"10.0.0.1","cpuTemperatures":[]`) {
+	if !strings.HasPrefix(string(raw), `{"deviceName":"dp1","deviceUrl":"https://10.0.0.1","deviceIp":"10.0.0.1","collectedAt":"`) {
 		t.Errorf("forma JSON = %s", raw)
+	}
+	if _, err := time.Parse(time.RFC3339, results[0].CollectedAt); err != nil {
+		t.Errorf("collectedAt = %q: %v", results[0].CollectedAt, err)
+	}
+	if len(results[0].Errors) != 2 || !strings.HasPrefix(results[0].Errors[0], "Device.HardwareInfo.getAll_CpuTemperature: soap fault") {
+		t.Errorf("errors = %q", results[0].Errors)
 	}
 
 	only, errs := m.GetAllHardware(context.Background(), []string{"DP1"})
@@ -315,5 +323,26 @@ func TestExtractIPFromURL(t *testing.T) {
 		if got := extractIPFromURL(in); got != want {
 			t.Errorf("extractIPFromURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestGateSerializesWithGap(t *testing.T) {
+	g := newGate(Limits{MaxConcurrency: 1, MinCallGap: 40 * time.Millisecond})
+	start := time.Now()
+	for i := 0; i < 3; i++ {
+		if err := g.acquire(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		g.release()
+	}
+	// 3 llamadas seguidas: 2 pausas de 40 ms como mínimo.
+	if el := time.Since(start); el < 80*time.Millisecond {
+		t.Errorf("3 llamadas en %v; la pausa mínima no se respetó", el)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := g.acquire(ctx); err == nil {
+		t.Error("acquire con contexto cancelado debió fallar")
 	}
 }

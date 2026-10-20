@@ -78,7 +78,10 @@ func main() {
 
 	httpClient := httpclient.NewSecureClient(true)
 
-	multi := service.NewMultiDefenseProService(devicesRepo, httpClient, logger, respCache, cfg.Device.MaxConcurrency)
+	multi := service.NewMultiDefenseProService(devicesRepo, httpClient, logger, respCache, service.Limits{
+		MaxConcurrency: cfg.Device.MaxConcurrency,
+		MinCallGap:     cfg.Device.MinCallGap,
+	})
 
 	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), refreshTimeout)
 	if err := multi.Refresh(refreshCtx); err != nil {

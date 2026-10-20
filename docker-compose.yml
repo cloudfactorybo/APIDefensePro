@@ -48,7 +48,8 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-text}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
       AUTH_DISABLED: ${AUTH_DISABLED:-}
-      DEVICE_MAX_CONCURRENCY: ${DEVICE_MAX_CONCURRENCY:-4}
+      DEVICE_MAX_CONCURRENCY: ${DEVICE_MAX_CONCURRENCY:-1}
+      DEVICE_MIN_CALL_GAP: ${DEVICE_MIN_CALL_GAP:-100ms}
     depends_on:
       postgres:
         condition: service_healthy

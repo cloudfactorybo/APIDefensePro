@@ -7,9 +7,14 @@ traefik/certs/*.pem
 # Documentación de Radware y código Alteon anterior (sólo locales)
 /DefensePro_v8-34-2-0_CLI_Reference_Manual/
 /DefensePro_v8-34-2-0_SOAP_API.rar/
+/DefensePro_v8-34-2-0_MIBs.rar/
+/DefensePro_v8-34-2-0_OIDs.pdf
 /_legacy_alteon/
 
 # Binarios compilados
 /defensepro-api
 /defensepro-admin
 *.exe
+
+# Documentación de Radware y derivados (sólo local)
+/defensepro/

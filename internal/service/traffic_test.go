@@ -102,10 +102,10 @@ func TestGetBehavioralTraffic(t *testing.T) {
 	bdos := readFixture(t, "bdos_stats.txt")
 	s, f := newTestService(t, map[string]string{"Security.Policy#getAll_Policy": policies})
 	f.cli = map[string]string{
-		"system internal security bdos statistics get Pol_APP": bdos,
-		"system internal security dns statistics get Pol_DNS":  readFixture(t, "dns_stats.txt"),
-		// Pol_DNS no está en el fixture de BDoS: su bloque BDoS debe faltar sin romper DNS.
-		"system internal security bdos statistics get Pol_DNS": bdos,
+		// El comando de BDoS ignora argumentos; Pol_DNS no está en el fixture, así
+		// que su bloque BDoS debe faltar sin romper DNS.
+		"system internal security bdos statistics":            bdos,
+		"system internal security dns statistics get Pol_DNS": readFixture(t, "dns_stats.txt"),
 	}
 
 	app, err := s.GetBehavioralTraffic(context.Background(), "pol_app")

@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -106,14 +104,11 @@ func TestGetCapacity(t *testing.T) {
 	}
 }
 
-func TestGetManagementNeverExposesPasswords(t *testing.T) {
+func TestGetManagement(t *testing.T) {
 	s, _ := newTestService(t, map[string]string{
 		"Management.Web#get_WebMngStatus":   val("disable"),
 		"Management.Telnet#get_Status":      val("enable"),
 		"Management.Services#get_NtpStatus": val("enable"),
-		"Management.Access#getAll_User": tbl(
-			"<UserName>radware</UserName><Password>SuperSecreta123</Password><UserAccess>readwrite</UserAccess>",
-		),
 		"Management.SyslogServers#getAll_SyslogServersTable": tbl(
 			"<syslogServerAddress>10.5.12.10</syslogServerAddress><syslogServerOperationalStatus>Enabled</syslogServerOperationalStatus><syslogSecuritySending>Disabled</syslogSecuritySending><syslogServerDestinationPort>514</syslogServerDestinationPort>",
 		),
@@ -126,16 +121,8 @@ func TestGetManagementNeverExposesPasswords(t *testing.T) {
 	if out.Access.HTTPStatus != "disable" || out.Access.TelnetStatus != "enable" || out.NTP.Status != "enable" {
 		t.Errorf("access = %+v ntp = %+v", out.Access, out.NTP)
 	}
-	if len(out.Users) != 1 || out.Users[0].Name != "radware" || out.Users[0].AccessLevel != "readwrite" {
-		t.Errorf("users = %+v", out.Users)
-	}
 	if len(out.Syslog.Servers) != 1 || out.Syslog.Servers[0].SecurityEvents != "Disabled" || out.Syslog.Servers[0].DestinationPort != 514 {
 		t.Errorf("syslog = %+v", out.Syslog)
-	}
-
-	raw, _ := json.Marshal(out)
-	if strings.Contains(string(raw), "SuperSecreta123") || strings.Contains(strings.ToLower(string(raw)), "password") {
-		t.Errorf("la contraseña no debe salir en el JSON: %s", raw)
 	}
 
 }

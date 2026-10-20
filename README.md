@@ -272,7 +272,8 @@ Variables de entorno, definidas en `.env` (ver [`.env.example`](.env.example)):
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. En `debug` se registra cada llamada SOAP |
 | `LOG_FORMAT` | `text` | `text` o `json` (para ingesta en SIEM) |
 | `ALLOWED_ORIGINS` | `*` | Orígenes CORS permitidos (CSV) |
-| `DEVICE_MAX_CONCURRENCY` | `4` | Llamadas SOAP simultáneas por equipo; bájalo a `1`-`2` si el DefensePro se ve cargado |
+| `DEVICE_MAX_CONCURRENCY` | `1` | Llamadas simultáneas (SOAP y SNMP) por equipo |
+| `DEVICE_MIN_CALL_GAP` | `100ms` | Pausa mínima entre llamadas al mismo equipo |
 | `PUBLIC_HTTPS_PORT` | `5687` | Puerto público HTTPS de Traefik |
 | `AUTH_DISABLED` | *(vacío)* | `true` desactiva la autenticación. Sólo para desarrollo |
 

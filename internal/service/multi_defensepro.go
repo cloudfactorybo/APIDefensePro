@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -16,11 +17,11 @@ import (
 )
 
 type MultiDefenseProService struct {
-	repo           *storage.DevicesRepo
-	httpClient     *http.Client
-	logger         *logrus.Logger
-	cache          *cache.Cache
-	maxConcurrency int
+	repo       *storage.DevicesRepo
+	httpClient *http.Client
+	logger     *logrus.Logger
+	cache      *cache.Cache
+	limits     Limits
 
 	mu      sync.RWMutex
 	devices []*Device
@@ -34,7 +35,12 @@ type Device struct {
 }
 
 func (d *Device) ref() models.DeviceRef {
-	return models.DeviceRef{DeviceName: d.Name, DeviceURL: d.URL, DeviceIP: d.IP}
+	return models.DeviceRef{
+		DeviceName:  d.Name,
+		DeviceURL:   d.URL,
+		DeviceIP:    d.IP,
+		CollectedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 }
 
 type DeviceError struct {
@@ -48,13 +54,13 @@ type PingResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func NewMultiDefenseProService(repo *storage.DevicesRepo, httpClient *httpclient.Client, logger *logrus.Logger, c *cache.Cache, maxConcurrency int) *MultiDefenseProService {
+func NewMultiDefenseProService(repo *storage.DevicesRepo, httpClient *httpclient.Client, logger *logrus.Logger, c *cache.Cache, limits Limits) *MultiDefenseProService {
 	return &MultiDefenseProService{
-		repo:           repo,
-		httpClient:     httpClient.Client,
-		logger:         logger,
-		cache:          c,
-		maxConcurrency: maxConcurrency,
+		repo:       repo,
+		httpClient: httpClient.Client,
+		logger:     logger,
+		cache:      c,
+		limits:     limits,
 	}
 }
 
@@ -74,7 +80,7 @@ func (m *MultiDefenseProService) Refresh(ctx context.Context) error {
 			Name:    d.Name,
 			URL:     d.BaseURL,
 			IP:      extractIPFromURL(d.BaseURL),
-			Service: NewDefenseProService(d.Name, d.BaseURL, d.Username, d.Password, m.httpClient, m.logger, m.cache, m.maxConcurrency),
+			Service: NewDefenseProService(d.Name, d.BaseURL, d.Username, d.Password, m.httpClient, m.logger, m.cache, m.limits),
 		})
 	}
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -35,9 +36,10 @@ type AuthConfig struct {
 }
 
 type DeviceConfig struct {
-	// MaxConcurrency limita las llamadas SOAP simultáneas por DefensePro. La
-	// CPU de gestión del equipo es modesta; si se ve lento, bajar a 1-2.
+	// MaxConcurrency limita las llamadas simultáneas (SOAP y SNMP) por equipo y
+	// MinCallGap fija una pausa entre ellas: la CPU de gestión es modesta.
 	MaxConcurrency int
+	MinCallGap     time.Duration
 }
 
 func Load() *Config {
@@ -59,7 +61,8 @@ func Load() *Config {
 			Enabled: getEnv("AUTH_DISABLED", "") != "true",
 		},
 		Device: DeviceConfig{
-			MaxConcurrency: parseInt(os.Getenv("DEVICE_MAX_CONCURRENCY"), 4),
+			MaxConcurrency: parseInt(os.Getenv("DEVICE_MAX_CONCURRENCY"), 1),
+			MinCallGap:     parseDuration(os.Getenv("DEVICE_MIN_CALL_GAP"), 100*time.Millisecond),
 		},
 	}
 }
@@ -80,6 +83,17 @@ func parseInt(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+func parseDuration(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return def
+	}
+	return d
 }
 
 func parseCSV(s string) []string {

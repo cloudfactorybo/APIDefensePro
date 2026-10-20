@@ -121,7 +121,7 @@ type TableLimits struct {
 }
 
 // Management es una auditoría de la gestión del equipo. No incluye ningún
-// secreto (contraseñas, claves RADIUS/TACACS+).
+// secreto: la tabla de usuarios no se consulta porque trae las contraseñas.
 type Management struct {
 	DeviceRef
 	Access             ManagementAccess `json:"access"`
@@ -131,7 +131,6 @@ type Management struct {
 	NTP                NTPStatus        `json:"ntp"`
 	DNS                DNSClient        `json:"dns"`
 	Syslog             SyslogStatus     `json:"syslog"`
-	Users              []ManagementUser `json:"users"`
 }
 
 type ManagementAccess struct {
@@ -180,13 +179,4 @@ type SyslogServer struct {
 	SecurityEvents  string `json:"securityEvents" soap:"syslogSecuritySending"`
 	HealthEvents    string `json:"healthEvents" soap:"syslogHealthSending"`
 	UserAudit       string `json:"userAudit" soap:"syslogUserAuditSending"`
-}
-
-// ManagementUser omite a propósito el campo Password de la tabla de usuarios.
-type ManagementUser struct {
-	Name        string `json:"name" soap:"UserName"`
-	AccessLevel string `json:"accessLevel" soap:"UserAccess"`
-	Groups      string `json:"groups" soap:"Groups"`
-	Email       string `json:"email" soap:"EmailAddress"`
-	Severity    string `json:"notificationSeverity" soap:"Severity"`
 }

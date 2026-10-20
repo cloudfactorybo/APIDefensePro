@@ -13,8 +13,9 @@ import (
 // GetNetworks devuelve las clases de red agrupadas por nombre. Usa la tabla
 // activa (la que aplican las políticas); si está vacía, la configurada.
 func (s *DefenseProService) GetNetworks(ctx context.Context, names []string) (*models.Networks, error) {
+	out := &models.Networks{Source: "active"}
 	var active, configured []models.NetworkEntry
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		table(s, soap.ClassesNetworks, "getAll_ActiveNetwork", configTTL, &active),
 		table(s, soap.ClassesNetworks, "getAll_Network", configTTL, &configured),
 	)
@@ -22,7 +23,6 @@ func (s *DefenseProService) GetNetworks(ctx context.Context, names []string) (*m
 		return nil, err
 	}
 
-	out := &models.Networks{Source: "active"}
 	entries := active
 	if len(entries) == 0 && len(configured) > 0 {
 		out.Source = "configured"
@@ -57,7 +57,7 @@ func groupNetworks(entries []models.NetworkEntry, filter map[string]bool) []mode
 func (s *DefenseProService) GetAccessLists(ctx context.Context) (*models.AccessLists, error) {
 	out := &models.AccessLists{BlockList: []models.AccessListEntry{}, AllowList: []models.AccessListEntry{}}
 	// statsTTL: la lista de bloqueo tiene entradas dinámicas que expiran.
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		table(s, soap.SecurityAccessLists, "getAll_BlackList", statsTTL, &out.BlockList),
 		table(s, soap.SecurityAccessLists, "getAll_WhiteList", configTTL, &out.AllowList),
 	)
@@ -74,7 +74,7 @@ func (s *DefenseProService) GetGeo(ctx context.Context) (*models.Geo, error) {
 		Countries:      []models.GeoCountry{},
 		ExcludedIPs:    []models.GeoExcludedIP{},
 	}
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		table(s, soap.SecurityGeoDynamicRule, "getAll_GeoPolicyDynamicRule", statsTTL, &out.DynamicRules),
 		table(s, soap.SecurityGeoTemporaryRule, "getAll_GeoPolicyTemporaryRule", statsTTL, &out.TemporaryRules),
 		table(s, soap.SecurityGeoCountries, "getAll_GeoAssocCountriesEntry", configTTL, &out.Countries),
@@ -91,7 +91,7 @@ func (s *DefenseProService) GetCapacity(ctx context.Context) (*models.Capacity, 
 	var sessionUsed, suspendUsed, tcpAuthUtil, httpAuthUtil int64
 	var policies []models.Policy
 	p, l := &out.Policies, &out.Limits
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		s.scalar(soap.DeviceSessionTable, "get_UsedEntriesNumber", statsTTL, &sessionUsed),
 		s.scalar(soap.DeviceSessionTable, "get_Status", configTTL, &out.SessionTable.Status),
 		table(s, soap.SecurityPolicy, "getAll_Policy", configTTL, &policies),
@@ -139,12 +139,12 @@ func setUsage(t *models.TableUsage, used int64) {
 }
 
 // GetManagement audita la gestión del equipo. Nunca lee secretos (RADIUS,
-// TACACS+). La tabla de usuarios trae el campo Password: no se mapea y se pide
-// sin cache para que el XML crudo no quede guardado en Redis.
+// TACACS+, contraseñas de usuarios): el candado de soap.CheckReadOnly los
+// bloquea aunque se pidan.
 func (s *DefenseProService) GetManagement(ctx context.Context) (*models.Management, error) {
-	out := &models.Management{Syslog: models.SyslogStatus{Servers: []models.SyslogServer{}}, Users: []models.ManagementUser{}}
+	out := &models.Management{Syslog: models.SyslogStatus{Servers: []models.SyslogServer{}}}
 	a, ntp := &out.Access, &out.NTP
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		s.scalar(soap.ManagementWeb, "get_WebMngStatus", configTTL, &a.HTTPStatus),
 		s.scalar(soap.ManagementWeb, "get_WebPort", configTTL, &a.HTTPPort),
 		s.scalar(soap.ManagementWeb, "get_SecureWebMngStatus", configTTL, &a.HTTPSStatus),
@@ -170,7 +170,6 @@ func (s *DefenseProService) GetManagement(ctx context.Context) (*models.Manageme
 		s.scalar(soap.DeviceDNSClient, "get_AlternateServer", configTTL, &out.DNS.Alternate),
 		s.scalar(soap.ManagementReporting, "get_SyslogGlobalStatus", configTTL, &out.Syslog.GlobalStatus),
 		table(s, soap.ManagementSyslogServers, "getAll_SyslogServersTable", configTTL, &out.Syslog.Servers),
-		table(s, soap.ManagementAccess, "getAll_User", 0, &out.Users),
 	)
 	if err != nil {
 		return nil, err

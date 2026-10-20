@@ -46,7 +46,7 @@ func (s *DefenseProService) GetProfiles(ctx context.Context, types []string) (*m
 	addProfiles(&tasks, want, "pps", s, soap.SecurityPpsRateLimit, "getAll_rsPpsRateLimitProfile", &out.PPSRateLimit)
 	addProfiles(&tasks, want, "connectionlimit", s, soap.SecurityConnectionLimit, "getAll_Profile", &out.ConnectionLimit)
 
-	if err := s.gather(ctx, tasks...); err != nil {
+	if err := s.gather(ctx, out, tasks...); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -82,7 +82,7 @@ func (s *DefenseProService) GetBehavioral(ctx context.Context, withBypass bool, 
 		out.BDoS.Bypass = &[]models.BDoSBypass{}
 		tasks = append(tasks, table(s, soap.SecurityBehavioralDoS, "getAll_rsNetFloodBypassEntry", configTTL, out.BDoS.Bypass))
 	}
-	if err := s.gather(ctx, tasks...); err != nil {
+	if err := s.gather(ctx, out, tasks...); err != nil {
 		return nil, err
 	}
 
@@ -102,7 +102,7 @@ func (s *DefenseProService) GetBehavioral(ctx context.Context, withBypass bool, 
 func (s *DefenseProService) GetAnalytics(ctx context.Context, f models.AttackFilter, top int) (*models.Analytics, error) {
 	out := &models.Analytics{PortTraffic: []models.PortTraffic{}, PolicyUtilization: []models.PolicyUtil{}}
 	var log []models.Attack
-	err := s.gather(ctx,
+	err := s.gather(ctx, out,
 		s.scalar(soap.DeviceStatistics, "get_TotalLastSecMbits", statsTTL, &out.Traffic.LastSecondMbits),
 		s.scalar(soap.DeviceHardwareInfo, "get_TotalLastSecPeak", statsTTL, &out.Traffic.PeakBps),
 		table(s, soap.DeviceStatistics, "getAll_PortLastSec", statsTTL, &out.PortTraffic),
