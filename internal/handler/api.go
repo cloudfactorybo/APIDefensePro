@@ -137,19 +137,25 @@ func (h *APIHandler) Behavioral(w http.ResponseWriter, r *http.Request) {
 }
 
 // BehavioralTraffic devuelve baseline, actual y descartado de BDoS (por
-// protocolo) y DNS (por tipo de consulta) de UNA política: ?policy= obligatorio.
+// protocolo) y DNS (por tipo de consulta). Sin ?policy= devuelve todas las
+// políticas con perfil BDoS o DNS (un elemento por equipo y política); con
+// ?policy=NOMBRE, sólo esa.
 func (h *APIHandler) BehavioralTraffic(w http.ResponseWriter, r *http.Request) {
 	devices, ok := h.devices(w, r)
 	if !ok {
 		return
 	}
 	policies := parseCSVParam(r, "policy")
-	if len(policies) != 1 {
-		writeError(w, http.StatusBadRequest, "indica una sola política: ?policy=NOMBRE")
-		return
+	switch len(policies) {
+	case 0:
+		results, errs := h.service.GetAllBehavioralTrafficPolicies(r.Context(), devices)
+		writeAggregated(w, results, errs, len(results) == 0 && len(errs) > 0)
+	case 1:
+		results, errs := h.service.GetAllBehavioralTraffic(r.Context(), devices, policies[0])
+		writeAggregated(w, results, errs, len(results) == 0)
+	default:
+		writeError(w, http.StatusBadRequest, "indica una sola política (?policy=NOMBRE) o ninguna para todas")
 	}
-	results, errs := h.service.GetAllBehavioralTraffic(r.Context(), devices, policies[0])
-	writeAggregated(w, results, errs, len(results) == 0)
 }
 
 // Analytics devuelve tráfico, utilización por política y agregados del log.

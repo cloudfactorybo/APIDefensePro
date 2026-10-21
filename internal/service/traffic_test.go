@@ -3,8 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
+
+	"defensepro-api/internal/models"
 )
 
 // Los fixtures reproducen la salida real de un DefensePro 8.34, incluida la
@@ -133,4 +137,105 @@ func TestGetBehavioralTraffic(t *testing.T) {
 	if _, err := s.GetBehavioralTraffic(context.Background(), "Pol_SinPerfiles"); err == nil {
 		t.Error("una política sin perfiles behavioral debe dar error")
 	}
+}
+
+type fakeSSH struct {
+	out   string
+	err   error
+	calls int
+}
+
+func (f *fakeSSH) Run(_ context.Context, command string) (string, error) {
+	f.calls++
+	if command != cmdBDoSStats {
+		return "", fmt.Errorf("comando inesperado %q", command)
+	}
+	return f.out, f.err
+}
+
+func TestGetBehavioralTrafficAll(t *testing.T) {
+	policies := tbl(
+		"<PolicyName>Pol_APP</PolicyName><BehavioralDosProfile>BDOS_APP</BehavioralDosProfile>",
+		"<PolicyName>Pol_Biblioteca</PolicyName><BehavioralDosProfile>BDOS_Bib</BehavioralDosProfile>",
+		"<PolicyName>Pol_WWW</PolicyName><BehavioralDosProfile>BDOS_WWW</BehavioralDosProfile>",
+		"<PolicyName>Pol_DNS</PolicyName><BehavioralDosProfile>BDOS_DNS</BehavioralDosProfile><DNSProtectionProfile>DNS_Prof</DNSProtectionProfile>",
+		"<PolicyName>Pol_SinPerfiles</PolicyName>",
+	)
+	bdos := readFixture(t, "bdos_stats.txt")
+	// Por SSH llega la salida completa: aquí, el fixture más Pol_WWW.
+	full := bdos + "\n" + strings.ReplaceAll(bdos, "Pol_APP", "Pol_WWW")
+
+	byPolicy := func(items []models.BehavioralTraffic) map[string]models.BehavioralTraffic {
+		m := map[string]models.BehavioralTraffic{}
+		for _, it := range items {
+			m[it.Policy] = it
+		}
+		return m
+	}
+	setup := func(ssh *fakeSSH) *DefenseProService {
+		s, f := newTestService(t, map[string]string{"Security.Policy#getAll_Policy": policies})
+		f.cli = map[string]string{
+			cmdBDoSStats: bdos, // vía SOAP: cortado a Pol_APP y Pol_Biblioteca
+			"system internal security dns statistics get Pol_DNS": readFixture(t, "dns_stats.txt"),
+		}
+		if ssh != nil {
+			s.SetSSH(ssh)
+		}
+		return s
+	}
+
+	t.Run("ssh", func(t *testing.T) {
+		ssh := &fakeSSH{out: full}
+		items, err := setup(ssh).GetBehavioralTrafficAll(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ssh.calls != 1 {
+			t.Errorf("sesiones SSH = %d, want 1 para todas las políticas", ssh.calls)
+		}
+		m := byPolicy(items)
+		if len(items) != 4 {
+			t.Fatalf("items = %d, want 4 (sin Pol_SinPerfiles)", len(items))
+		}
+		for _, p := range []string{"Pol_APP", "Pol_Biblioteca", "Pol_WWW"} {
+			if m[p].BDoS == nil || len(m[p].Errors) > 0 {
+				t.Errorf("%s = %+v", p, m[p])
+			}
+		}
+		if m["Pol_WWW"].BDoS.Profile != "BDOS_WWW" {
+			t.Errorf("perfil = %q", m["Pol_WWW"].BDoS.Profile)
+		}
+		dns := m["Pol_DNS"]
+		if dns.DNS == nil || dns.BDoS != nil || len(dns.Errors) != 1 || !strings.Contains(dns.Errors[0], "no aparece en la salida del equipo") {
+			t.Errorf("Pol_DNS = %+v", dns)
+		}
+	})
+
+	t.Run("sin ssh", func(t *testing.T) {
+		m := byPolicy(must(setup(nil).GetBehavioralTrafficAll(context.Background())))
+		if m["Pol_APP"].BDoS == nil || m["Pol_WWW"].BDoS != nil {
+			t.Errorf("APP = %+v, WWW = %+v", m["Pol_APP"].BDoS, m["Pol_WWW"].BDoS)
+		}
+		if e := m["Pol_WWW"].Errors; len(e) != 1 || !strings.Contains(e[0], "ssh-trust") {
+			t.Errorf("Pol_WWW errors = %v", e)
+		}
+	})
+
+	t.Run("ssh falla", func(t *testing.T) {
+		ssh := &fakeSSH{err: errors.New("connection refused")}
+		m := byPolicy(must(setup(ssh).GetBehavioralTrafficAll(context.Background())))
+		if m["Pol_APP"].BDoS == nil {
+			t.Error("debió caer a SOAP")
+		}
+		if e := m["Pol_WWW"].Errors; len(e) != 1 || !strings.Contains(e[0], "SSH falló") {
+			t.Errorf("Pol_WWW errors = %v", e)
+		}
+	})
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }

@@ -12,8 +12,11 @@ import (
 	"defensepro-api/internal/config"
 	"defensepro-api/internal/snmp"
 	"defensepro-api/internal/soap"
+	"defensepro-api/internal/sshcli"
 	"defensepro-api/internal/storage"
 	"defensepro-api/pkg/httpclient"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func main() {
@@ -244,6 +247,79 @@ func main() {
 			fmt.Println(p)
 		}
 
+	case "ssh-trust":
+		if len(os.Args) != 3 && len(os.Args) != 4 {
+			fmt.Fprintln(os.Stderr, "uso: admin ssh-trust <name> [puerto]")
+			os.Exit(2)
+		}
+		d, err := devices.GetByName(ctx, os.Args[2])
+		if err != nil {
+			exit(err)
+		}
+		port := 22
+		if len(os.Args) == 4 {
+			if port, err = strconv.Atoi(os.Args[3]); err != nil || port < 1 || port > 65535 {
+				exit(fmt.Errorf("puerto inválido: %s", os.Args[3]))
+			}
+		}
+		host := hostOf(d.BaseURL)
+		key, err := sshcli.FetchHostKey(ctx, host, port)
+		if err != nil {
+			exit(err)
+		}
+		if err := devices.SetSSH(ctx, d.Name, storage.SSH{Port: port, HostKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))}); err != nil {
+			exit(err)
+		}
+		fmt.Printf("llave de %s:%d registrada: %s %s\n", host, port, key.Type(), ssh.FingerprintSHA256(key))
+		fmt.Println("compárala con la del equipo antes de confiar en ella; luego: admin test-ssh", d.Name)
+		fmt.Println("la API la usa al recargar equipos (cada 5 min) o con: docker compose restart app")
+
+	case "ssh-forget":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "uso: admin ssh-forget <name>")
+			os.Exit(2)
+		}
+		if err := devices.SetSSH(ctx, os.Args[2], storage.SSH{}); err != nil {
+			exit(err)
+		}
+		fmt.Println("SSH desactivado: las estadísticas BDoS vuelven al CLI vía SOAP (salida parcial)")
+
+	case "test-ssh":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "uso: admin test-ssh <name>")
+			os.Exit(2)
+		}
+		d, err := devices.GetByName(ctx, os.Args[2])
+		if err != nil {
+			exit(err)
+		}
+		if d.SSH.HostKey == "" {
+			exit(fmt.Errorf("el dispositivo %s no tiene SSH configurado (admin ssh-trust %s)", d.Name, d.Name))
+		}
+		client, err := sshcli.NewClient(sshcli.Config{
+			Host: hostOf(d.BaseURL), Port: d.SSH.Port, User: d.Username, Password: d.Password, HostKey: d.SSH.HostKey,
+		})
+		if err != nil {
+			exit(err)
+		}
+		callCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		defer cancel()
+		start := time.Now()
+		out, err := client.Run(callCtx, "system internal security bdos statistics")
+		if err != nil {
+			exit(err)
+		}
+		var names []string
+		for _, line := range strings.Split(out, "\n") {
+			if n, ok := strings.CutPrefix(strings.TrimSpace(line), "policy name - "); ok {
+				names = append(names, strings.TrimSpace(n))
+			}
+		}
+		fmt.Printf("OK  %d bytes en %s, %d políticas con BDoS\n", len(out), time.Since(start).Round(time.Millisecond), len(names))
+		for _, n := range names {
+			fmt.Println("   ", n)
+		}
+
 	case "create-token":
 		if len(os.Args) != 3 {
 			fmt.Fprintln(os.Stderr, "uso: admin create-token <name>")
@@ -322,6 +398,14 @@ func snmpClient(ctx context.Context, devices *storage.DevicesRepo, name string) 
 	return client, fmt.Sprintf("%s:%d", u.Hostname(), d.SNMP.Port)
 }
 
+func hostOf(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		exit(err)
+	}
+	return u.Hostname()
+}
+
 func callValue(ctx context.Context, client *soap.Client, svc soap.Service, op string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -355,6 +439,11 @@ Comandos:
   test-snmp <name>                         prueba SNMP con el equipo
   snmp-walk <name> <oid>                   walk de diagnóstico (sólo ramas permitidas)
   snmp-allowlist                           lista las ramas SNMP permitidas
+  ssh-trust <name> [puerto]                registra la llave SSH del equipo y activa la lectura
+                                           completa de estadísticas BDoS por SSH (usa el mismo
+                                           usuario y contraseña del equipo)
+  ssh-forget <name>                        desactiva SSH (BDoS vuelve al CLI vía SOAP, parcial)
+  test-ssh <name>                          prueba SSH: lee las estadísticas BDoS y cuenta políticas
   create-token <name>
   list-tokens
   revoke-token <id>

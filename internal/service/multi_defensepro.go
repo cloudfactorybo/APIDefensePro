@@ -13,6 +13,7 @@ import (
 	"defensepro-api/internal/models"
 	"defensepro-api/internal/reqctx"
 	"defensepro-api/internal/snmp"
+	"defensepro-api/internal/sshcli"
 	"defensepro-api/internal/storage"
 	"defensepro-api/pkg/httpclient"
 )
@@ -89,6 +90,16 @@ func (m *MultiDefenseProService) Refresh(ctx context.Context) error {
 				m.logger.WithField("device", d.Name).WithError(err).Error("configuración SNMP inválida")
 			} else {
 				svc.SetSNMP(client)
+			}
+		}
+		if d.SSH.HostKey != "" {
+			client, err := sshcli.NewClient(sshcli.Config{
+				Host: ip, Port: d.SSH.Port, User: d.Username, Password: d.Password, HostKey: d.SSH.HostKey,
+			})
+			if err != nil {
+				m.logger.WithField("device", d.Name).WithError(err).Error("configuración SSH inválida")
+			} else {
+				svc.SetSSH(client)
 			}
 		}
 		devices = append(devices, &Device{Name: d.Name, URL: d.BaseURL, IP: ip, Service: svc})
@@ -276,6 +287,44 @@ func (m *MultiDefenseProService) GetAllBehavioralTraffic(ctx context.Context, na
 	return fanOut(ctx, m, names, "behavioral-traffic", func(s *DefenseProService, ctx context.Context) (*models.BehavioralTraffic, error) {
 		return s.GetBehavioralTraffic(ctx, policy)
 	})
+}
+
+// GetAllBehavioralTrafficPolicies devuelve un elemento por (equipo, política
+// behavioral), con la misma forma que GetAllBehavioralTraffic.
+func (m *MultiDefenseProService) GetAllBehavioralTrafficPolicies(ctx context.Context, names []string) ([]models.BehavioralTraffic, []DeviceError) {
+	devices := m.snapshot(names)
+	results := make([][]models.BehavioralTraffic, len(devices))
+	errs := make([]*DeviceError, len(devices))
+
+	var wg sync.WaitGroup
+	for i, d := range devices {
+		wg.Go(func() {
+			items, err := d.Service.GetBehavioralTrafficAll(ctx)
+			if err != nil {
+				m.logError(ctx, "behavioral-traffic", d, err)
+				errs[i] = &DeviceError{Device: d.Name, Error: err.Error()}
+				return
+			}
+			ref := d.ref()
+			for j := range items {
+				items[j].SetDevice(ref)
+			}
+			results[i] = items
+		})
+	}
+	wg.Wait()
+
+	out := []models.BehavioralTraffic{}
+	for _, r := range results {
+		out = append(out, r...)
+	}
+	outErrs := []DeviceError{}
+	for _, e := range errs {
+		if e != nil {
+			outErrs = append(outErrs, *e)
+		}
+	}
+	return out, outErrs
 }
 
 func (m *MultiDefenseProService) GetAllAnalytics(ctx context.Context, names []string, f models.AttackFilter, top int) ([]models.Analytics, []DeviceError) {

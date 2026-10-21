@@ -102,6 +102,10 @@ admin test-device DP-CORE-1
 admin set-snmp DP-CORE-1 snmp-ro SHA 'ClaveAuth' AES 'ClavePriv'
 admin test-snmp DP-CORE-1
 
+# 4b. (Opcional) SSH para las estadísticas BDoS de todas las políticas
+admin ssh-trust DP-CORE-1
+admin test-ssh DP-CORE-1
+
 # 5. Emitir un token (se muestra una sola vez)
 admin create-token mi-cliente
 
@@ -158,7 +162,7 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 | `GET` | `/api/v1/geo` | Reglas geo dinámicas y temporales por política, países asociados a cada perfil e IPs excluidas | 10 s – 1 min |
 | `GET` | `/api/v1/capacity` | Uso vs. capacidad de la session table, suspend table y tablas de autenticación TCP/HTTP; límites de políticas y tablas internas | 10 s – 10 min |
 | `GET` | `/api/v1/management` | Auditoría de gestión: HTTP/HTTPS/SSH/Telnet y sus puertos, cifrados débiles, método de autenticación, NTP, DNS y syslog | 1 min |
-| `GET` | `/api/v1/behavioral/traffic` | Métricas en tiempo real de una política (como BDoS/DNS Traffic Monitoring del Vision): baseline, tráfico actual, descartado y legítimo de BDoS por protocolo (entrada/salida, IPv4/IPv6, estado de aprendizaje y anomalía) y de DNS por tipo de consulta. `?policy=` obligatorio | 10 s |
+| `GET` | `/api/v1/behavioral/traffic` | Métricas en tiempo real (como BDoS/DNS Traffic Monitoring del Vision): baseline, tráfico actual, descartado y legítimo de BDoS por protocolo (entrada/salida, IPv4/IPv6, estado de aprendizaje y anomalía) y de DNS por tipo de consulta. Sin `?policy=`, **todas** las políticas con perfil BDoS o DNS (un elemento por equipo y política); con `?policy=NOMBRE`, sólo esa. BDoS completo requiere SSH (ver [Estadísticas BDoS por SSH](#estadísticas-bdos-por-ssh)) | 30 s (SSH) / 10 s |
 | `GET` | `/api/v1/analytics` | Network analytics: tráfico total y por puerto, utilización por política y agregados del log (top ataques, orígenes, destinos, puertos y políticas) | 5 s – 10 s |
 
 ¹ Uptime, fecha y hora se leen siempre en vivo.
@@ -327,7 +331,6 @@ alias admin='docker compose exec app defensepro-admin'
 | `enable-device <name>` / `disable-device <name>` | Activa o pausa un equipo sin borrarlo |
 | `remove-device <name>` | Elimina un equipo |
 | `test-device <name>` | Prueba la conexión SOAP con el equipo |
-| `cli <name> "<comando>"` | Ejecuta un comando CLI en el equipo vía SOAP (sólo diagnóstico; la API HTTP no lo expone) |
 | `soap-call <name> <servicio> <operación>` | Muestra el XML crudo de una operación SOAP de lectura |
 | `cli <name> "<comando>"` | Ejecuta uno de los comandos CLI de lectura permitidos |
 | `set-snmp <name> <user> <auth> <auth-pass> <priv> <priv-pass> [puerto]` | Configura SNMPv3 (auth `MD5`/`SHA`/`SHA256`...; priv `DES`/`AES`/`AES256`.../`NONE`) |
@@ -335,6 +338,9 @@ alias admin='docker compose exec app defensepro-admin'
 | `test-snmp <name>` | Prueba SNMP con el equipo |
 | `snmp-walk <name> <oid>` | Walk de diagnóstico, sólo sobre ramas permitidas |
 | `snmp-allowlist` | Lista las ramas SNMP permitidas |
+| `ssh-trust <name> [puerto]` | Registra la llave SSH del equipo y activa la lectura de estadísticas BDoS por SSH (mismo usuario y contraseña del equipo) |
+| `ssh-forget <name>` | Desactiva SSH: BDoS vuelve al CLI vía SOAP (parcial) |
+| `test-ssh <name>` | Lee las estadísticas BDoS por SSH y lista las políticas encontradas |
 | `create-token <name>` | Emite un token de acceso (se muestra una sola vez) |
 | `list-tokens` | Lista los tokens (id, nombre, creación, último uso, estado) |
 | `revoke-token <id>` | Revoca un token |
@@ -400,6 +406,13 @@ Baja `DEVICE_MAX_CONCURRENCY` en `.env` (p. ej. `2`) y aplica con `docker compos
 </details>
 
 <details>
+<summary><b><code>/behavioral/traffic</code>: "no entra en la salida del CLI vía SOAP"</b></summary>
+
+El CLI vía SOAP corta la respuesta por tamaño y sólo trae el BDoS de ~2 políticas. Configura SSH (ver [Estadísticas BDoS por SSH](#estadísticas-bdos-por-ssh)). Si SSH está configurado y aparece "SSH falló", revisa con `admin test-ssh <name>`: llave de host cambiada (vuelve a ejecutar `ssh-trust`), SSH deshabilitado en el equipo o firewall.
+
+</details>
+
+<details>
 <summary><b><code>/health/deep</code> devuelve <code>total: 0</code></b></summary>
 
 La API aún no recargó la lista de equipos. Ejecuta `docker compose restart app`.
@@ -412,6 +425,25 @@ La API aún no recargó la lista de equipos. Ejecuta `docker compose restart app
 El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs/*.pem` por uno de una CA de confianza.
 
 </details>
+
+---
+
+## Estadísticas BDoS por SSH
+
+`/behavioral/traffic` lee el baseline y el tráfico BDoS con el comando `system internal security bdos statistics`. Por SOAP (`CLI.Command`) el equipo corta esa salida por tamaño, así que sólo llegan ~2 políticas; por una sesión SSH llega completa (≈ 0,9 MB con 32 políticas). SNMP no tiene esos datos: el MIB sólo expone la configuración de BDoS y tablas de import/export de baseline que requieren escritura.
+
+```bash
+admin ssh-trust DP-CORE-1      # registra la llave del equipo (muestra su huella SHA256)
+admin test-ssh DP-CORE-1       # debe listar todas las políticas con BDoS
+docker compose restart app     # o esperar la recarga de equipos (5 min)
+```
+
+- Usa el **mismo usuario y contraseña** con que se registró el equipo; ese usuario debe poder entrar por SSH.
+- La llave de host se verifica en cada conexión: si el equipo cambia de llave, la conexión se rechaza hasta volver a ejecutar `ssh-trust`.
+- La sesión sólo envía el comando de estadísticas (allowlist cerrada), `" "` para pasar un `--More--` si el equipo pagina, y `logout`. No cambia ninguna configuración.
+- Una sesión por consulta como máximo: las consultas simultáneas comparten la misma sesión y el resultado se cachea 30 s. Usa el mismo control de concurrencia que SOAP y SNMP, y se omite si la CPU supera `DEVICE_BUSY_CPU_PCT`.
+- Si SSH falla, la API cae al CLI vía SOAP y marca en `errors` las políticas que no entraron.
+- La paginación del equipo (`manage terminal more-prompt`) puede quedar como esté: con `on` la API responde a cada `--More--`; con `off` la salida llega de una vez.
 
 ---
 
@@ -438,7 +470,7 @@ El certificado generado es autofirmado: usa `curl -k` o reemplaza `traefik/certs
 | `geo` | `Security.GeoPolicyDynamicRule` getAll_GeoPolicyDynamicRule · `Security.GeoPolicyTemporaryRule` getAll_GeoPolicyTemporaryRule · `Security.GeoAssocCountries` getAll_GeoAssocCountriesEntry · `Security.GeoExcludedIPList` getAll_GeoExcludedIPListEntry |
 | `capacity` | `Device.SessionTable` get_UsedEntriesNumber · `Device.Tuning` get_SessionsCurrent · `Security.SuspendTable` get_SuspendTableEntries · `Security.AuthenticationTables` get_Tcp/HttpAuthenticationTableUtilization · `Security.Policy` get_TotalPolicyNum, HwEntriesUtil, SubPolicyUtil · `Security.Tuning`: \*Current y tamaños de tablas de autenticación |
 | `management` | `Management.Web`, `Management.Ssh`, `Management.Telnet`: estado y puertos · `Management.Access`: get_UserAuthentication, RadiusServer, TacacsMainServerIP · `Management.Services`: NTP · `Device.DNSClient` · `Management.Reporting` get_SyslogGlobalStatus · `Management.SyslogServers` getAll_SyslogServersTable |
-| `behavioral/traffic` | `Security.Policy` getAll_Policy (valida la política) · `CLI.Command` apply_CLICommand con los comandos fijos `system internal security bdos statistics get <política>` y `system internal security dns statistics get <política>`. La salida de texto se convierte a JSON; sólo se aceptan nombres que existen en el equipo |
+| `behavioral/traffic` | `Security.Policy` getAll_Policy (políticas y perfiles) · `system internal security bdos statistics` por SSH (o `CLI.Command` vía SOAP, parcial) · `CLI.Command` `system internal security dns statistics get <política>` por cada política con perfil DNS. La salida de texto se convierte a JSON; sólo se aceptan nombres que existen en el equipo |
 | `analytics` | `Device.Statistics`: get_TotalLastSecMbits, getAll_PortLastSec · `Device.HardwareInfo`: get_TotalLastSecPeak · `Security.PolicyUtil`: getAll_PolicyUtil · `Security.Reporting`: getAll_Log |
 | `protections` | get_Status de `Security.BehavioralDoS`, `SynProtection`, `HTTPSFloodProtection`, `AntiScanning`, `SignatureProtection` (+ get_DosShieldStatus), `ErtAttackersFeedStatus` · `Security.StatefulInspection`: get_status · `Security.DnsProtection`: get_DnsProtectionGlobalStatus · `Security.BehavioralDoS`: getAll_Profiles |
 
@@ -500,10 +532,11 @@ Las pruebas no necesitan un equipo real: usan un DefensePro simulado (`httptest`
 
 - La API es **de sólo lectura, garantizado en código**:
   - El cliente SOAP rechaza, antes de tocar la red, toda operación que no sea `get_`/`getAll_`/`getFirst_`/`getNext_` y sólo admite 3 comandos CLI fijos de lectura. Aplica también al CLI de administración.
+  - El cliente SSH sólo envía comandos de una allowlist cerrada (hoy, uno: las estadísticas BDoS) y verifica la llave de host registrada con `ssh-trust`.
   - El cliente SNMP no tiene ningún método de escritura (un test verifica que el código no llame a `Set`) y sólo consulta ramas de una allowlist; el walk completo del árbol, las comunidades, la base de firmas y los objetos de reset de baseline quedan fuera.
 - Nunca se leen secretos: las 18 operaciones SOAP que devuelven claves (RADIUS/TACACS+, licencia, clave privada, contraseñas de usuarios, claves SNMP, passphrase de certificados) están bloqueadas.
 - Freno por carga: si la CPU del equipo supera `DEVICE_BUSY_CPU_PCT`, las consultas pesadas se omiten.
-- Las credenciales SOAP y SNMP de los equipos se guardan **en texto plano** en PostgreSQL: protege el host, el volumen de la base y los backups.
+- Las credenciales SOAP, SSH y SNMP de los equipos se guardan **en texto plano** en PostgreSQL: protege el host, el volumen de la base y los backups.
 - Los tokens se guardan hasheados con SHA-256 y sólo se muestran al crearlos.
 - Por defecto el puerto público sólo escucha en loopback y TLS exige al menos TLS 1.2.
 - `.env` y los certificados están excluidos del repositorio.

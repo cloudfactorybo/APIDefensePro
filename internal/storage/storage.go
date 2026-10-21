@@ -44,6 +44,10 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS snmp_auth_proto TEXT    NOT NULL DE
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS snmp_auth_pass  TEXT    NOT NULL DEFAULT '';
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS snmp_priv_proto TEXT    NOT NULL DEFAULT '';
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS snmp_priv_pass  TEXT    NOT NULL DEFAULT '';
+
+-- SSH por equipo (opcional): llave de host registrada con "admin ssh-trust".
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS ssh_port     INTEGER NOT NULL DEFAULT 22;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS ssh_host_key TEXT    NOT NULL DEFAULT '';
 `
 
 func Open(dsn string) (*Storage, error) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 
 	"defensepro-api/internal/cache"
 	"defensepro-api/internal/models"
@@ -37,6 +38,8 @@ type DefenseProService struct {
 
 	unsupported sync.Map   // "Servicio#op" → *soap.Fault de operaciones que el modelo no tiene
 	snmp        snmpReader // nil = equipo sin SNMP configurado
+	ssh         sshRunner  // nil = equipo sin SSH configurado
+	sshFlight   singleflight.Group
 }
 
 func NewDefenseProService(name, baseURL, username, password string, client *http.Client, logger *logrus.Logger, c *cache.Cache, limits Limits) *DefenseProService {

@@ -17,6 +17,7 @@ type Device struct {
 	CACert             string
 	Enabled            bool
 	SNMP               SNMP // SNMP.User vacío = sin SNMP
+	SSH                SSH  // SSH.HostKey vacío = sin SSH
 }
 
 // SNMP son las credenciales SNMPv3 (USM) de un equipo.
@@ -29,6 +30,13 @@ type SNMP struct {
 	PrivPass  string
 }
 
+// SSH: el usuario y la contraseña son los mismos del equipo (Username/Password);
+// HostKey es la llave pública del equipo en formato authorized_keys.
+type SSH struct {
+	Port    int
+	HostKey string
+}
+
 type DevicesRepo struct {
 	db *sql.DB
 }
@@ -38,13 +46,15 @@ func NewDevicesRepo(s *Storage) *DevicesRepo {
 }
 
 const deviceColumns = `id, name, base_url, username, password, insecure_skip_verify, COALESCE(ca_cert, ''), enabled,
-	snmp_user, snmp_port, snmp_auth_proto, snmp_auth_pass, snmp_priv_proto, snmp_priv_pass`
+	snmp_user, snmp_port, snmp_auth_proto, snmp_auth_pass, snmp_priv_proto, snmp_priv_pass,
+	ssh_port, ssh_host_key`
 
 func scanDevice(row interface{ Scan(...any) error }) (Device, error) {
 	var d Device
 	err := row.Scan(&d.ID, &d.Name, &d.BaseURL, &d.Username, &d.Password,
 		&d.InsecureSkipVerify, &d.CACert, &d.Enabled,
-		&d.SNMP.User, &d.SNMP.Port, &d.SNMP.AuthProto, &d.SNMP.AuthPass, &d.SNMP.PrivProto, &d.SNMP.PrivPass)
+		&d.SNMP.User, &d.SNMP.Port, &d.SNMP.AuthProto, &d.SNMP.AuthPass, &d.SNMP.PrivProto, &d.SNMP.PrivPass,
+		&d.SSH.Port, &d.SSH.HostKey)
 	return d, err
 }
 
@@ -120,6 +130,24 @@ func (r *DevicesRepo) SetSNMP(ctx context.Context, name string, s SNMP) error {
                snmp_priv_proto = $5, snmp_priv_pass = $6, updated_at = NOW()
         WHERE name = $7
     `, s.User, s.Port, s.AuthProto, s.AuthPass, s.PrivProto, s.PrivPass, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("dispositivo %q no encontrado", name)
+	}
+	return nil
+}
+
+// SetSSH guarda (o, con HostKey vacío, borra) la configuración SSH de un equipo.
+func (r *DevicesRepo) SetSSH(ctx context.Context, name string, s SSH) error {
+	if s.Port == 0 {
+		s.Port = 22
+	}
+	res, err := r.db.ExecContext(ctx, `
+        UPDATE devices SET ssh_port = $1, ssh_host_key = $2, updated_at = NOW() WHERE name = $3
+    `, s.Port, s.HostKey, name)
 	if err != nil {
 		return err
 	}
