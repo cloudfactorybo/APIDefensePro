@@ -135,23 +135,23 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 
 ### Endpoints
 
-| Método | Endpoint | Descripción | Cache |
+| Método | Endpoint | Descripción | [Cache](#cache) |
 |---|---|---|---|
 | `GET` | `/health` | Estado del proceso (sin auth) | — |
 | `GET` | `/health/deep` | Ping SOAP a cada equipo (sin auth) | — |
 | `GET` | `/api/v1/traffic/policies` | **SNMP** · Tráfico en tiempo real por política y protocolo (TCP, UDP, ICMP, OTHER, SCTP, IGMP): conexiones nuevas, pps y bytes/s recibidos y descartados, más totales. `?policy=`, `?include_idle=true` | 10 s |
-| `GET` | `/api/v1/traffic/ports` | **SNMP** · Por puerto físico, con su nombre (`TenGE-1`, `Gigabit Ethernet-7`, `MNG-1`), estado y velocidad del enlace: pps, Mbps, descartes y errores de entrada/salida, y por protocolo recibido, descartado y excluido. `?include_idle=true` | 10 s |
+| `GET` | `/api/v1/traffic/ports` | **SNMP** · Por puerto físico, con su nombre (`TenGE-1`, `Gigabit Ethernet-7`, `MNG-1`), estado y velocidad del enlace: pps, Mbps, descartes y errores de entrada/salida, y por protocolo recibido, descartado y excluido. `?include_idle=true` | 10 s – 1 min |
 | `GET` | `/api/v1/sessions` | **SNMP** · Conexiones concurrentes TCP/UDP, entradas de la session table y uso por engine | 10 s |
 | `GET` | `/api/v1/syn-triggers` | **SNMP** · Triggers activos de SYN protection: IP y puerto atacados, SYN y requests por segundo, descartadas | 10 s |
-| `GET` | `/api/v1/health` | **SNMP** · Salud: CPU (controlador y engines), acelerador, RAM, disco, temperaturas, fuentes, HA, reloj del equipo y su desfase, tablas internas, feed ERT y estado de cada servidor syslog (alcanzable, logs pendientes) | 10 s |
+| `GET` | `/api/v1/health` | **SNMP** · Salud: CPU (controlador y engines), acelerador, RAM, disco, temperaturas, fuentes, HA, reloj del equipo y su desfase, tablas internas, feed ERT y estado de cada servidor syslog (alcanzable, logs pendientes) | 10 s – 1 min |
 | `GET` | `/api/v1/info` | **SNMP** · Identidad: nombre, serie, versión, tipo, puertos, throughput y mitigación licenciados, cores, MAC | 10 min |
 | `GET` | `/api/v1/system` | Nombre, ubicación, uptime, plataforma, versiones de software, hardware, módulo de seguridad y base de firmas; MAC, RAM, modo de mitigación y operación, estado HA e imágenes instaladas | 10 min ¹ |
 | `GET` | `/api/v1/licenses` | License ID, licencia de throughput, capacidad de mitigación y estado del feed ERT (la clave de licencia no se publica) | 10 min |
 | `GET` | `/api/v1/monitoring` | CPU global y por engine, RAM, disco, tráfico del último segundo y pico, entradas de la session table | 10 s |
 | `GET` | `/api/v1/hardware` | Temperatura de CPUs, ventiladores y fuentes de poder | 10 s |
-| `GET` | `/api/v1/interfaces` | Interfaces L2 con estado y contadores, puertos físicos y tráfico por puerto | 10 s |
+| `GET` | `/api/v1/interfaces` | Interfaces L2 con estado y contadores, puertos físicos y tráfico por puerto | 10 s – 1 min |
 | `GET` | `/api/v1/network` | Interfaces IP (IPv4/IPv6) y tabla de rutas | 1 min |
-| `GET` | `/api/v1/policies` | Políticas de protección con perfiles, utilización y recursos de HW. Filtro `?policy=` | 1 min |
+| `GET` | `/api/v1/policies` | Políticas de protección con perfiles, utilización y recursos de HW. Filtro `?policy=` | 10 s – 1 min |
 | `GET` | `/api/v1/attacks` | Log de seguridad con filtros y resumen agregado | 5 s |
 | `GET` | `/api/v1/suspended` | Orígenes suspendidos o bloqueados | 10 s |
 | `GET` | `/api/v1/protections` | Estado global de cada módulo de protección y perfiles BDoS | 1 min |
@@ -161,11 +161,36 @@ Todos los endpoints `/api/v1/*` requieren el header `Authorization: Bearer <toke
 | `GET` | `/api/v1/blocklists` | Listas de bloqueo (incluidas las dinámicas con su expiración) y de permitidos | 10 s – 1 min |
 | `GET` | `/api/v1/geo` | Reglas geo dinámicas y temporales por política, países asociados a cada perfil e IPs excluidas | 10 s – 1 min |
 | `GET` | `/api/v1/capacity` | Uso vs. capacidad de la session table, suspend table y tablas de autenticación TCP/HTTP; límites de políticas y tablas internas | 10 s – 10 min |
-| `GET` | `/api/v1/management` | Auditoría de gestión: HTTP/HTTPS/SSH/Telnet y sus puertos, cifrados débiles, método de autenticación, NTP, DNS y syslog | 1 min |
-| `GET` | `/api/v1/behavioral/traffic` | Métricas en tiempo real (como BDoS/DNS Traffic Monitoring del Vision): baseline, tráfico actual, descartado y legítimo de BDoS por protocolo (entrada/salida, IPv4/IPv6, estado de aprendizaje y anomalía) y de DNS por tipo de consulta. Sin `?policy=`, **todas** las políticas con perfil BDoS o DNS (un elemento por equipo y política); con `?policy=NOMBRE`, sólo esa. BDoS completo requiere SSH (ver [Estadísticas BDoS por SSH](#estadísticas-bdos-por-ssh)) | 30 s (SSH) / 10 s |
+| `GET` | `/api/v1/management` | Auditoría de gestión: HTTP/HTTPS/SSH/Telnet y sus puertos, cifrados débiles, método de autenticación, NTP, DNS y syslog | 1 min ² |
+| `GET` | `/api/v1/behavioral/traffic` | Métricas en tiempo real (como BDoS/DNS Traffic Monitoring del Vision): baseline, tráfico actual, descartado y legítimo de BDoS por protocolo (entrada/salida, IPv4/IPv6, estado de aprendizaje y anomalía) y de DNS por tipo de consulta. Sin `?policy=`, **todas** las políticas con perfil BDoS o DNS (un elemento por equipo y política); con `?policy=NOMBRE`, sólo esa. BDoS completo requiere SSH (ver [Estadísticas BDoS por SSH](#estadísticas-bdos-por-ssh)) | 30 s (SSH) · 10 s – 1 min |
 | `GET` | `/api/v1/analytics` | Network analytics: tráfico total y por puerto, utilización por política y agregados del log (top ataques, orígenes, destinos, puertos y políticas) | 5 s – 10 s |
 
-¹ Uptime, fecha y hora se leen siempre en vivo.
+¹ Uptime, fecha y hora se leen siempre en vivo; el estado HA, cada 10 s.
+² La hora del servidor NTP se lee siempre en vivo; su desfase, cada 10 s.
+
+### Cache
+
+Todos los endpoints `/api/v1/*` usan una cache en **Redis**. Lo que se cachea no es la respuesta HTTP, sino **cada lectura al equipo** (una operación SOAP, un walk o get SNMP, un comando CLI o SSH), por equipo y con sus parámetros. Por eso:
+
+- Varios clientes o integraciones que piden lo mismo dentro del TTL generan **una sola** consulta al DefensePro.
+- Endpoints distintos comparten lecturas: por ejemplo, `getAll_Policy` sirve a `/policies`, `/capacity`, `/behavioral` y `/behavioral/traffic`.
+- Sólo se guardan respuestas válidas: un error nunca queda en la cache.
+- `collectedAt` es la hora de la respuesta; el dato puede tener hasta el TTL de antigüedad.
+
+| Tipo de dato | TTL | Qué incluye |
+|---|---|---|
+| Identidad e inventario | 10 min | Versiones, plataforma, RAM, MAC, imágenes instaladas, licencias, capacidades y límites de tablas, identidad SNMP (`/info`) |
+| Configuración | 1 min | Políticas, perfiles, estado de cada módulo, interfaces IP y rutas, clases de red, listas de permitidos, gestión (HTTP/SSH/NTP/DNS/syslog), nombres de puertos (IF-MIB), estado de la session table |
+| Estadísticas BDoS por SSH | 30 s | Salida completa de `bdos statistics` para `/behavioral/traffic` |
+| Contadores y estado | 10 s | CPU, RAM, disco, tráfico, temperaturas, fuentes, sesiones, tablas internas, suspendidos, lista de bloqueo, reglas geo, todo lo de SNMP en tiempo real, estadísticas DNS (CLI) |
+| Log de seguridad | 5 s | `getAll_Log`, que usan `/attacks`, `/analytics` y `/behavioral` |
+| **Sin cache** | — | `/health`, `/health/deep`, uptime/fecha/hora de `/system` y hora del servidor NTP de `/management` |
+
+**Al consultar desde ELK u otro colector:** un intervalo menor que el TTL devuelve los mismos valores. Para contadores, 1 minuto es suficiente; para inventario y configuración, de 1 a 24 horas.
+
+**Si Redis no está disponible:** la API no arranca sin Redis. Si Redis se cae después, la API sigue respondiendo, pero sin cache: cada consulta va al equipo, sólo limitada por `DEVICE_MAX_CONCURRENCY` y `DEVICE_MIN_CALL_GAP`.
+
+**Para comprobarlo:** con `LOG_LEVEL=debug`, las líneas `llamada soap` y `comando ssh` sólo aparecen cuando la lectura va al equipo, no cuando sale de la cache.
 
 ### Filtros de `/api/v1/attacks`
 
