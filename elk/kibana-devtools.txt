@@ -1,0 +1,1222 @@
+# =====================================================================
+# DefensePro API -> Elastic (Fleet Custom API / httpjson)
+# Pegar en Kibana > Dev Tools > Console.
+#
+# Antes de ejecutar: reemplaza __TOKEN__ por el Bearer token de la API
+# (Ctrl+H en la consola). No guardes este archivo con el token real.
+#
+# Por cada endpoint hay 3 requests, en este orden:
+#   1. PUT _component_template/logs-<dataset>@custom  (evita que los docs
+#      terminen en el failure store: event.dataset es constant_keyword)
+#   2. PUT _ingest/pipeline/defensepro-<endpoint>
+#   3. POST kbn:/api/fleet/package_policies           (la integración)
+#
+# Campos: los del equipo van a ECS (observer.*, @timestamp); el resto queda
+# en defensepro.<sección>.* con los mismos nombres que la respuesta de la API.
+# =====================================================================
+
+
+# ---------------------------------------------------------------------
+# 0. Pipelines compartidos (una sola vez)
+# ---------------------------------------------------------------------
+
+PUT _ingest/pipeline/defensepro-common
+{
+  "description": "DefensePro API: parseo y campos del equipo. Lo llaman todos los pipelines defensepro-*",
+  "processors": [
+    { "json": { "field": "message", "target_field": "_parsed" } },
+    { "drop": { "description": "Respuesta sin equipo", "if": "!(ctx._parsed instanceof Map) || ctx._parsed.deviceName == null" } },
+    { "date": { "if": "ctx._parsed.collectedAt != null", "field": "_parsed.collectedAt", "formats": ["ISO8601"], "ignore_failure": true } },
+    { "set": { "field": "observer.vendor", "value": "Radware" } },
+    { "set": { "field": "observer.product", "value": "DefensePro" } },
+    { "set": { "field": "observer.type", "value": "ids" } },
+    { "rename": { "field": "_parsed.deviceName", "target_field": "observer.name" } },
+    { "rename": { "if": "ctx._parsed.deviceIp != null && ctx._parsed.deviceIp != ''", "field": "_parsed.deviceIp", "target_field": "observer.ip" } },
+    { "rename": { "field": "_parsed.deviceUrl", "target_field": "defensepro.url", "ignore_missing": true } },
+    { "rename": { "field": "_parsed.errors", "target_field": "defensepro.errors", "ignore_missing": true } },
+    { "rename": { "field": "_parsed.unsupported", "target_field": "defensepro.unsupported", "ignore_missing": true } },
+    { "remove": { "field": ["_parsed.collectedAt", "_parsed.deviceIp"], "ignore_missing": true } },
+    { "set": { "field": "defensepro.collection", "value": "ok" } },
+    { "set": { "if": "ctx.defensepro.errors instanceof List && ctx.defensepro.errors.size() > 0", "field": "defensepro.collection", "value": "partial" } },
+    { "set": { "field": "event.type", "value": ["info"] } }
+  ]
+}
+
+PUT _ingest/pipeline/defensepro-finalize
+{
+  "description": "DefensePro API: mueve el resto de la respuesta a defensepro.<sección> y limpia",
+  "processors": [
+    {
+      "script": {
+        "lang": "painless",
+        "source": """
+          if (ctx._dp?.section != null && ctx._parsed instanceof Map) {
+            ctx.defensepro[ctx._dp.section] = ctx._parsed;
+          }
+        """
+      }
+    },
+    { "remove": { "field": ["_parsed", "_dp", "message"], "ignore_missing": true } }
+  ]
+}
+
+
+# =====================================================================
+# 1. SISTEMA Y MONITOREO
+# =====================================================================
+
+# --- 1.1 Licencias (cada 24 h) ---------------------------------------
+
+PUT _component_template/logs-radware.defense_pro.licenses@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.licenses" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-licenses
+{
+  "description": "DefensePro /api/v1/licenses",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "licenses" } },
+    { "set": { "field": "event.kind", "value": "state" } },
+    { "set": { "field": "event.category", "value": ["configuration"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Licenses",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/licenses",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.licenses",
+    "pipeline": "defensepro-licenses",
+    "request_url": "https://127.0.0.1:5687/api/v1/licenses",
+    "request_interval": "24h",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 1.2 Monitoring: CPU, engines, RAM, disco, tráfico (cada 1 min) --
+
+PUT _component_template/logs-radware.defense_pro.monitoring@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.monitoring" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-monitoring
+{
+  "description": "DefensePro /api/v1/monitoring",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "monitoring" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["host"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Monitoring",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/monitoring",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.monitoring",
+    "pipeline": "defensepro-monitoring",
+    "request_url": "https://127.0.0.1:5687/api/v1/monitoring",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 1.3 Hardware: temperaturas, ventiladores, fuentes (cada 5 min) --
+
+PUT _component_template/logs-radware.defense_pro.hardware@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.hardware" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-hardware
+{
+  "description": "DefensePro /api/v1/hardware",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "hardware" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["host"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Hardware",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/hardware",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.hardware",
+    "pipeline": "defensepro-hardware",
+    "request_url": "https://127.0.0.1:5687/api/v1/hardware",
+    "request_interval": "5m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 1.4 Capacidad de tablas internas (cada 5 min) -------------------
+
+PUT _component_template/logs-radware.defense_pro.capacity@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.capacity" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-capacity
+{
+  "description": "DefensePro /api/v1/capacity",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "capacity" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["host"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Capacity",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/capacity",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.capacity",
+    "pipeline": "defensepro-capacity",
+    "request_url": "https://127.0.0.1:5687/api/v1/capacity",
+    "request_interval": "5m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+
+# =====================================================================
+# 2. TIEMPO REAL POR SNMP
+# =====================================================================
+
+# --- 2.1 Tráfico por política: 1 documento por política (cada 1 min) -
+
+PUT _component_template/logs-radware.defense_pro.traffic_policies@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.traffic_policies" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-traffic-policies
+{
+  "description": "DefensePro /api/v1/traffic/policies (split por política)",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "drop": { "description": "Equipo sin políticas", "if": "!(ctx._parsed.policies instanceof Map)" } },
+    { "script": { "lang": "painless", "source": "ctx._parsed = ctx._parsed.policies;" } },
+    { "set": { "field": "_dp.section", "value": "traffic_policy" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["network"] } },
+    { "pipeline": { "name": "defensepro-finalize" } },
+    { "set": { "field": "defensepro.policy", "copy_from": "defensepro.traffic_policy.policy", "ignore_empty_value": true } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Traffic Policies",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/traffic/policies (SNMP)",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.traffic_policies",
+    "pipeline": "defensepro-traffic-policies",
+    "request_url": "https://127.0.0.1:5687/api/v1/traffic/policies",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false\nsplit:\n  target: body.policies\n  type: array\n  keep_parent: true\n  ignore_empty_value: true",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 2.2 Tráfico por puerto físico: 1 documento por puerto (1 min) ---
+
+PUT _component_template/logs-radware.defense_pro.traffic_ports@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.traffic_ports" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-traffic-ports
+{
+  "description": "DefensePro /api/v1/traffic/ports (split por puerto)",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "drop": { "description": "Equipo sin puertos", "if": "!(ctx._parsed.ports instanceof Map)" } },
+    {
+      "script": {
+        "lang": "painless",
+        "source": """
+          def p = ctx._parsed;
+          def port = p.ports;
+          port.deviceTotalInMbps = p.totalInMbps;
+          ctx._parsed = port;
+        """
+      }
+    },
+    { "set": { "field": "_dp.section", "value": "traffic_port" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["network"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Traffic Ports",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/traffic/ports (SNMP)",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.traffic_ports",
+    "pipeline": "defensepro-traffic-ports",
+    "request_url": "https://127.0.0.1:5687/api/v1/traffic/ports",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false\nsplit:\n  target: body.ports\n  type: array\n  keep_parent: true\n  ignore_empty_value: true",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 2.3 Sesiones concurrentes (cada 1 min) --------------------------
+
+PUT _component_template/logs-radware.defense_pro.sessions@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.sessions" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-sessions
+{
+  "description": "DefensePro /api/v1/sessions",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "sessions" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["network"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Sessions",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/sessions (SNMP)",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.sessions",
+    "pipeline": "defensepro-sessions",
+    "request_url": "https://127.0.0.1:5687/api/v1/sessions",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 2.4 SYN triggers: 1 documento por trigger activo (cada 1 min) ---
+# Sin triggers activos llega 1 documento con defensepro.syn.active=false.
+
+PUT _component_template/logs-radware.defense_pro.syn_triggers@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.syn_triggers" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-syn-triggers
+{
+  "description": "DefensePro /api/v1/syn-triggers (split por trigger)",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    {
+      "script": {
+        "lang": "painless",
+        "source": """
+          def p = ctx._parsed;
+          if (p.triggers instanceof Map) { p.trigger = p.triggers; p.active = true; } else { p.active = false; }
+          p.remove('triggers');
+        """
+      }
+    },
+    { "set": { "field": "_dp.section", "value": "syn" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["network", "intrusion_detection"] } },
+    { "pipeline": { "name": "defensepro-finalize" } },
+    { "set": { "field": "destination.address", "copy_from": "defensepro.syn.trigger.destinationIp", "ignore_empty_value": true } },
+    { "convert": { "field": "destination.address", "target_field": "destination.ip", "type": "ip", "ignore_missing": true, "ignore_failure": true } },
+    { "set": { "field": "destination.port", "copy_from": "defensepro.syn.trigger.destinationPort", "ignore_empty_value": true } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro SYN Triggers",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/syn-triggers (SNMP)",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.syn_triggers",
+    "pipeline": "defensepro-syn-triggers",
+    "request_url": "https://127.0.0.1:5687/api/v1/syn-triggers",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false\nsplit:\n  target: body.triggers\n  type: array\n  keep_parent: true\n  ignore_empty_value: true",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 2.5 Salud del equipo por SNMP (cada 5 min) ----------------------
+
+PUT _component_template/logs-radware.defense_pro.health@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.health" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-health
+{
+  "description": "DefensePro /api/v1/health",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "health" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["host"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Health",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/health (SNMP)",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.health",
+    "pipeline": "defensepro-health",
+    "request_url": "https://127.0.0.1:5687/api/v1/health",
+    "request_interval": "5m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 2.6 Identidad por SNMP: serial, cores, throughput (cada 24 h) ---
+
+PUT _component_template/logs-radware.defense_pro.info@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.info" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-info
+{
+  "description": "DefensePro /api/v1/info",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "info" } },
+    { "set": { "field": "event.kind", "value": "state" } },
+    { "set": { "field": "event.category", "value": ["host"] } },
+    { "pipeline": { "name": "defensepro-finalize" } },
+    { "set": { "field": "observer.serial_number", "copy_from": "defensepro.info.serialNumber", "ignore_empty_value": true } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Info",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/info (SNMP)",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.info",
+    "pipeline": "defensepro-info",
+    "request_url": "https://127.0.0.1:5687/api/v1/info",
+    "request_interval": "24h",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+
+# =====================================================================
+# 3. BEHAVIORAL (BDoS y DNS)
+# =====================================================================
+
+# --- 3.1 Estado, perfiles y resumen de ataques behavioral (15 min) ---
+# limit=1: el resumen de ataques se calcula sobre todo el log; la lista
+# de ataques se descarta en el pipeline (ya llega por el dataset attacks).
+
+PUT _component_template/logs-radware.defense_pro.behavioral@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.behavioral" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-behavioral
+{
+  "description": "DefensePro /api/v1/behavioral",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "remove": { "field": "_parsed.attacks", "ignore_missing": true } },
+    { "set": { "field": "_dp.section", "value": "behavioral" } },
+    { "set": { "field": "event.kind", "value": "state" } },
+    { "set": { "field": "event.category", "value": ["configuration", "intrusion_detection"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Behavioral",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/behavioral",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.behavioral",
+    "pipeline": "defensepro-behavioral",
+    "request_url": "https://127.0.0.1:5687/api/v1/behavioral?limit=1",
+    "request_interval": "15m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 3.2 Tráfico BDoS/DNS en tiempo real de TODAS las políticas (1 min)
+# Un documento por política (la API devuelve un elemento por equipo y
+# política). BDoS completo requiere SSH en la API (admin ssh-trust); sin
+# SSH sólo llegan ~2 políticas y el resto trae el motivo en defensepro.errors.
+# Las listas por protocolo (BDoS) y por tipo de consulta (DNS) se pasan a
+# campos con nombre, para graficarlos directo en Lens:
+#   defensepro.behavioral_traffic.bdos.inbound.ipv4.protocols.udp.currentBps
+#   defensepro.behavioral_traffic.dns.ipv4.a.currentQps
+# Si ya creaste "Defense Pro Behavioral Traffic Pol_DNS", bórrala desde Fleet
+# (o cambia su URL quitando ?policy=Pol_DNS) para no duplicar Pol_DNS.
+
+PUT _component_template/logs-radware.defense_pro.behavioral_traffic@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.behavioral_traffic" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-behavioral-traffic
+{
+  "description": "DefensePro /api/v1/behavioral/traffic?policy=",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    {
+      "script": {
+        "lang": "painless",
+        "description": "Listas por protocolo / tipo de consulta -> objetos con nombre",
+        "source": """
+          String key(def s) {
+            if (s == null) { return 'unknown'; }
+            String t = s.toString().toLowerCase();
+            StringBuilder b = new StringBuilder();
+            boolean sep = false;
+            for (int i = 0; i < t.length(); i++) {
+              char c = t.charAt(i);
+              if (Character.isLetterOrDigit(c)) { b.append(c); sep = false; }
+              else if (!sep && b.length() > 0) { b.append('_'); sep = true; }
+            }
+            String r = b.toString();
+            if (r.endsWith('_')) { r = r.substring(0, r.length() - 1); }
+            return r.isEmpty() ? 'unknown' : r;
+          }
+          Map byKey(def list, String field) {
+            Map m = new HashMap();
+            if (list instanceof List) {
+              for (def it : list) {
+                if (it instanceof Map) {
+                  Map c = new HashMap(it);
+                  def k = c.remove(field);
+                  m.put(key(k), c);
+                }
+              }
+            }
+            return m;
+          }
+          def p = ctx._parsed;
+          if (p.bdos instanceof Map) {
+            for (String d : ['inbound', 'outbound']) {
+              def dir = p.bdos[d];
+              if (!(dir instanceof Map)) { continue; }
+              for (String f : ['ipv4', 'ipv6']) {
+                def fam = dir[f];
+                if (fam instanceof Map && fam.protocols != null) { fam.protocols = byKey(fam.protocols, 'protocol'); }
+              }
+            }
+          }
+          if (p.dns instanceof Map) {
+            for (String f : ['ipv4', 'ipv6']) {
+              if (p.dns[f] != null) { p.dns[f] = byKey(p.dns[f], 'type'); }
+            }
+          }
+        """
+      }
+    },
+    { "set": { "field": "_dp.section", "value": "behavioral_traffic" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["network", "intrusion_detection"] } },
+    { "pipeline": { "name": "defensepro-finalize" } },
+    { "set": { "field": "defensepro.policy", "copy_from": "defensepro.behavioral_traffic.policy", "ignore_empty_value": true } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Behavioral Traffic",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/behavioral/traffic (todas las políticas)",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.behavioral_traffic",
+    "pipeline": "defensepro-behavioral-traffic",
+    "request_url": "https://127.0.0.1:5687/api/v1/behavioral/traffic",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+
+# =====================================================================
+# 4. ATAQUES Y ANALYTICS
+# =====================================================================
+
+# --- 4.1 Ataques de riesgo alto y medio: 1 documento por ataque (1 min)
+# Cada consulta trae los 200 más recientes; los repetidos se descartan
+# solos porque el _id es una huella del ataque (equipo, índice, hora,
+# tipo, nombre). @timestamp = hora del ataque en el equipo (La Paz).
+
+PUT _component_template/logs-radware.defense_pro.attacks@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.attacks" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-attacks
+{
+  "description": "DefensePro /api/v1/attacks (split por ataque, sin duplicados)",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "drop": { "description": "Equipo sin ataques en esta consulta", "if": "!(ctx._parsed.attacks instanceof Map)" } },
+    { "script": { "lang": "painless", "source": "ctx._parsed = ctx._parsed.attacks;" } },
+    { "set": { "field": "_dp.section", "value": "attack" } },
+    { "set": { "field": "event.kind", "value": "alert" } },
+    { "set": { "field": "event.category", "value": ["intrusion_detection", "network"] } },
+    { "pipeline": { "name": "defensepro-finalize" } },
+    { "date": { "field": "defensepro.attack.time", "target_field": "event.start", "formats": ["dd-MM-yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "dd.MM.yyyy HH:mm:ss"], "timezone": "America/La_Paz", "ignore_failure": true } },
+    { "set": { "if": "ctx.event?.start != null", "field": "@timestamp", "copy_from": "event.start" } },
+    {
+      "script": {
+        "lang": "painless",
+        "description": "Riesgo -> event.severity; tipo -> event.type",
+        "source": """
+          def a = ctx.defensepro.attack;
+          String r = a.risk == null ? '' : a.risk.toString().toLowerCase();
+          if (r == 'critical') { ctx.event.severity = 99; }
+          else if (r == 'high') { ctx.event.severity = 73; }
+          else if (r == 'medium') { ctx.event.severity = 47; }
+          else if (r == 'low') { ctx.event.severity = 21; }
+          String t = a.type == null ? '' : a.type.toString().toLowerCase();
+          if (t == 'started') { ctx.event.type = ['start']; }
+          else if (t == 'terminated') { ctx.event.type = ['end']; }
+          else { ctx.event.type = ['info']; }
+        """
+      }
+    },
+    { "set": { "field": "rule.name", "copy_from": "defensepro.attack.name", "ignore_empty_value": true } },
+    { "set": { "field": "rule.category", "copy_from": "defensepro.attack.category", "ignore_empty_value": true } },
+    { "set": { "field": "event.action", "copy_from": "defensepro.attack.action", "ignore_empty_value": true } },
+    { "set": { "field": "event.code", "copy_from": "defensepro.attack.radwareId", "ignore_empty_value": true } },
+    { "set": { "field": "defensepro.policy", "copy_from": "defensepro.attack.policyName", "ignore_empty_value": true } },
+    { "set": { "field": "source.address", "copy_from": "defensepro.attack.sourceAddress", "ignore_empty_value": true } },
+    { "convert": { "field": "source.address", "target_field": "source.ip", "type": "ip", "ignore_missing": true, "ignore_failure": true } },
+    { "set": { "field": "source.port", "copy_from": "defensepro.attack.sourcePort", "ignore_empty_value": true } },
+    { "set": { "field": "destination.address", "copy_from": "defensepro.attack.destinationAddress", "ignore_empty_value": true } },
+    { "convert": { "field": "destination.address", "target_field": "destination.ip", "type": "ip", "ignore_missing": true, "ignore_failure": true } },
+    { "set": { "field": "destination.port", "copy_from": "defensepro.attack.destinationPort", "ignore_empty_value": true } },
+    { "set": { "field": "network.transport", "copy_from": "defensepro.attack.protocol", "ignore_empty_value": true } },
+    { "lowercase": { "field": "network.transport", "ignore_missing": true } },
+    { "set": { "field": "network.packets", "copy_from": "defensepro.attack.packetCount", "ignore_empty_value": true } },
+    { "set": { "field": "network.bytes", "copy_from": "defensepro.attack.byteCount", "ignore_empty_value": true } },
+    { "fingerprint": { "fields": ["observer.name", "defensepro.attack.index", "defensepro.attack.time", "defensepro.attack.type", "defensepro.attack.name"], "target_field": "event.id", "method": "SHA-1", "ignore_missing": true } },
+    { "set": { "field": "_id", "copy_from": "event.id" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Attacks",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/attacks?risk=high,medium",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.attacks",
+    "pipeline": "defensepro-attacks",
+    "request_url": "https://127.0.0.1:5687/api/v1/attacks?risk=high,medium&limit=200",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false\nsplit:\n  target: body.attacks\n  type: array\n  keep_parent: true\n  ignore_empty_value: true",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 4.2 Analytics de Pol_WWW, top 5 (cada 5 min) --------------------
+# El filtro de la URL queda en tags (policy:Pol_WWW) para distinguirlo si
+# agregas otra integración de analytics con otro filtro.
+
+PUT _component_template/logs-radware.defense_pro.analytics@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.analytics" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-analytics
+{
+  "description": "DefensePro /api/v1/analytics",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "analytics" } },
+    { "set": { "field": "event.kind", "value": "metric" } },
+    { "set": { "field": "event.category", "value": ["intrusion_detection", "network"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Analytics Pol_WWW",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/analytics?policy=Pol_WWW&top=5",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.analytics",
+    "pipeline": "defensepro-analytics",
+    "request_url": "https://127.0.0.1:5687/api/v1/analytics?policy=Pol_WWW&top=5",
+    "request_interval": "5m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded", "policy:Pol_WWW"]
+  } } } } }
+}
+
+falta
+# =====================================================================
+# 5. BLOQUEOS
+# =====================================================================
+
+# --- 5.1 Orígenes suspendidos: 1 documento por entrada (cada 1 min) --
+# Con la tabla vacía llega 1 documento con defensepro.suspended.total=0.
+
+PUT _component_template/logs-radware.defense_pro.suspended@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.suspended" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-suspended
+{
+  "description": "DefensePro /api/v1/suspended (split por entrada)",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    {
+      "script": {
+        "lang": "painless",
+        "source": """
+          def p = ctx._parsed;
+          if (p.entries instanceof Map) { p.entry = p.entries; }
+          p.remove('entries');
+        """
+      }
+    },
+    { "set": { "field": "_dp.section", "value": "suspended" } },
+    { "set": { "field": "event.kind", "value": "state" } },
+    { "set": { "field": "event.category", "value": ["intrusion_detection", "network"] } },
+    { "pipeline": { "name": "defensepro-finalize" } },
+    { "set": { "field": "source.address", "copy_from": "defensepro.suspended.entry.sourceIp", "ignore_empty_value": true } },
+    { "convert": { "field": "source.address", "target_field": "source.ip", "type": "ip", "ignore_missing": true, "ignore_failure": true } },
+    { "set": { "field": "destination.address", "copy_from": "defensepro.suspended.entry.destinationIp", "ignore_empty_value": true } },
+    { "convert": { "field": "destination.address", "target_field": "destination.ip", "type": "ip", "ignore_missing": true, "ignore_failure": true } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Suspended",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/suspended",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.suspended",
+    "pipeline": "defensepro-suspended",
+    "request_url": "https://127.0.0.1:5687/api/v1/suspended",
+    "request_interval": "1m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false\nsplit:\n  target: body.entries\n  type: array\n  keep_parent: true\n  ignore_empty_value: true",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 5.2 Listas de bloqueo y permitidos (cada 1 h) -------------------
+
+PUT _component_template/logs-radware.defense_pro.blocklists@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.blocklists" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-blocklists
+{
+  "description": "DefensePro /api/v1/blocklists",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    {
+      "script": {
+        "lang": "painless",
+        "source": """
+          def p = ctx._parsed;
+          p.blockListCount = p.blockList instanceof List ? p.blockList.size() : 0;
+          p.allowListCount = p.allowList instanceof List ? p.allowList.size() : 0;
+        """
+      }
+    },
+    { "set": { "field": "_dp.section", "value": "blocklists" } },
+    { "set": { "field": "event.kind", "value": "state" } },
+    { "set": { "field": "event.category", "value": ["configuration"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Blocklists",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/blocklists",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.blocklists",
+    "pipeline": "defensepro-blocklists",
+    "request_url": "https://127.0.0.1:5687/api/v1/blocklists",
+    "request_interval": "1h",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+# --- 5.3 Geo: bloqueos por país dinámicos/temporales (cada 15 min) ---
+
+PUT _component_template/logs-radware.defense_pro.geo@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.geo" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-geo
+{
+  "description": "DefensePro /api/v1/geo",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    {
+      "script": {
+        "lang": "painless",
+        "source": """
+          def p = ctx._parsed;
+          p.dynamicRulesCount = p.dynamicRules instanceof List ? p.dynamicRules.size() : 0;
+          p.temporaryRulesCount = p.temporaryRules instanceof List ? p.temporaryRules.size() : 0;
+        """
+      }
+    },
+    { "set": { "field": "_dp.section", "value": "geo" } },
+    { "set": { "field": "event.kind", "value": "state" } },
+    { "set": { "field": "event.category", "value": ["configuration"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Geo",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/geo",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.geo",
+    "pipeline": "defensepro-geo",
+    "request_url": "https://127.0.0.1:5687/api/v1/geo",
+    "request_interval": "15m",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+ya esta 
+
+# =====================================================================
+# 6. AUDITORÍA DE GESTIÓN (cada 6 h)
+# =====================================================================
+
+PUT _component_template/logs-radware.defense_pro.management@custom
+{
+  "template": { "mappings": {
+    "dynamic_templates": [ { "defensepro_decimales": { "path_match": ["defensepro.*Mbps", "defensepro.*Percent", "defensepro.*PerPps"], "match_mapping_type": ["long", "double"], "mapping": { "type": "double" } } } ],
+    "properties": { "event": { "properties": { "dataset": { "type": "constant_keyword", "value": "radware.defense_pro.management" } } } }
+  } }
+}
+
+PUT _ingest/pipeline/defensepro-management
+{
+  "description": "DefensePro /api/v1/management",
+  "processors": [
+    { "pipeline": { "name": "defensepro-common" } },
+    { "set": { "field": "_dp.section", "value": "management" } },
+    { "set": { "field": "event.kind", "value": "state" } },
+    { "set": { "field": "event.category", "value": ["configuration"] } },
+    { "pipeline": { "name": "defensepro-finalize" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "event.kind", "value": "pipeline_error" } },
+    { "set": { "field": "error.message", "value": "{{{ _ingest.on_failure_message }}}" } },
+    { "remove": { "field": ["_parsed", "_dp"], "ignore_missing": true } }
+  ]
+}
+
+POST kbn:/api/fleet/package_policies
+{
+  "package": { "name": "httpjson", "version": "1.25.0" },
+  "name": "Defense Pro Management",
+  "namespace": "",
+  "description": "DefensePro API /api/v1/management",
+  "policy_ids": ["fleet-server-policy"],
+  "vars": {},
+  "inputs": { "generic-httpjson": { "enabled": true, "streams": { "httpjson.generic": { "enabled": true, "vars": {
+    "data_stream.dataset": "radware.defense_pro.management",
+    "pipeline": "defensepro-management",
+    "request_url": "https://127.0.0.1:5687/api/v1/management",
+    "request_interval": "6h",
+    "request_method": "GET",
+    "request_transforms": "- set:\n    target: header.Authorization\n    value: 'Bearer __TOKEN__'",
+    "response_split": "target: body.data\ntype: array\nkeep_parent: false",
+    "request_ssl": "verification_mode: none\n",
+    "request_timeout": "1m",
+    "request_redirect_headers_ban_list": [],
+    "oauth_scopes": [],
+    "enable_request_tracer": false,
+    "tags": ["forwarded"]
+  } } } } }
+}
+
+
+# =====================================================================
+# 7. VERIFICACIÓN (después de 2-3 minutos)
+# =====================================================================
+
+# Documentos por dataset en los últimos 15 min
+POST _query?format=txt
+{
+  "query": "FROM logs-radware.defense_pro.* | WHERE @timestamp > NOW() - 15 minutes | STATS docs = COUNT(*), ultimo = MAX(@timestamp) BY event.dataset | SORT event.dataset"
+}
+
+# Rechazados (failure store) por dataset: debería salir vacío
+POST _query?format=txt
+{
+  "query": "FROM logs-radware.defense_pro.*::failures | WHERE @timestamp > NOW() - 1 hour | STATS fallas = COUNT(*), ultimo = MAX(@timestamp) BY document.index, error.type | LIMIT 20"
+}
+
+# Errores del pipeline (event.kind = pipeline_error)
+POST _query?format=txt
+{
+  "query": "FROM logs-radware.defense_pro.* | WHERE event.kind == \"pipeline_error\" | KEEP @timestamp, event.dataset, error.message | SORT @timestamp DESC | LIMIT 10"
+}
